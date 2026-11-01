@@ -1,0 +1,21 @@
+[project]
+name = "mesh-scout-proof"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "pydantic>=2.6",
+    # NOTE (v1): yfinance is deliberately NOT listed. Scout's market
+    # steps (quarterly history, price reaction) then raise inside
+    # Scout's try blocks and land in pack.missing instead of failing,
+    # while the stdlib-only EDGAR / Nasdaq / transcript steps carry
+    # the pack. Whether pywrangler can bundle yfinance (+pandas) into
+    # a Worker is a separate, later experiment — v1 first proves the
+    # Worker can reach EDGAR/Nasdaq/Fool at all via urllib.
+]
+
+[dependency-groups]
+dev = [
+    "workers-py",
+    "workers-runtime-sdk",
+]
