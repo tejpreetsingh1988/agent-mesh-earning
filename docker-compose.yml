@@ -1,0 +1,57 @@
+services:
+  orchestrator:
+    build: .
+    command: uvicorn apps.orchestrator.main:app --host 0.0.0.0 --port 8000
+    ports: ["8000:8000"]
+    # OPENROUTER_API_KEY is needed here too: the SSE stream path runs
+    # Writer locally in the orchestrator, while /tasks/send runs it
+    # in the writer service. Both read the same host .env value.
+    environment: [AGENT_NAME=orchestrator, SCOUT_URL=http://scout:8001, ANALYST_URL=http://analyst:8002, CRITIC_URL=http://critic:8003, WRITER_URL=http://writer:8004, "OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}", "LLM_MODEL_PRIMARY=${LLM_MODEL_PRIMARY:-}", "LLM_MODEL_FALLBACK=${LLM_MODEL_FALLBACK:-}", "LLM_MODEL_FALLBACKS=${LLM_MODEL_FALLBACKS:-}", "AGENT_API_TOKEN=${AGENT_API_TOKEN:-}"]
+    depends_on: [scout, analyst, critic, writer]
+  scout:
+    build: .
+    command: uvicorn agents.scout.main:app --host 0.0.0.0 --port 8001
+    ports: ["8001:8001"]
+    environment: [AGENT_NAME=scout, FILINGS_MCP_URL=http://filings-mcp:8101, MARKET_MCP_URL=http://market-mcp:8102, ESTIMATES_MCP_URL=http://estimates-news-mcp:8103, "AGENT_API_TOKEN=${AGENT_API_TOKEN:-}"]
+    depends_on: [filings-mcp, market-mcp, estimates-news-mcp]
+  analyst:
+    build: .
+    command: uvicorn agents.analyst.main:app --host 0.0.0.0 --port 8002
+    ports: ["8002:8002"]
+    environment: [AGENT_NAME=analyst, "AGENT_API_TOKEN=${AGENT_API_TOKEN:-}"]
+  critic:
+    build: .
+    command: uvicorn agents.critic.main:app --host 0.0.0.0 --port 8003
+    ports: ["8003:8003"]
+    environment: [AGENT_NAME=critic, FILINGS_MCP_URL=http://filings-mcp:8101, MARKET_MCP_URL=http://market-mcp:8102, ESTIMATES_MCP_URL=http://estimates-news-mcp:8103, "AGENT_API_TOKEN=${AGENT_API_TOKEN:-}"]
+    depends_on: [filings-mcp, market-mcp, estimates-news-mcp]
+  writer:
+    build: .
+    command: uvicorn agents.writer.main:app --host 0.0.0.0 --port 8004
+    ports: ["8004:8004"]
+    environment: [AGENT_NAME=writer, "OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}", "LLM_MODEL_PRIMARY=${LLM_MODEL_PRIMARY:-}", "LLM_MODEL_FALLBACK=${LLM_MODEL_FALLBACK:-}", "LLM_MODEL_FALLBACKS=${LLM_MODEL_FALLBACKS:-}", "AGENT_API_TOKEN=${AGENT_API_TOKEN:-}"]
+  filings-mcp:
+    build: .
+    command: uvicorn mcp_servers.filings.main:fast_app --host 0.0.0.0 --port 8101
+    ports: ["8101:8101"]
+    environment: [MCP_SERVER=filings, "AGENT_API_TOKEN=${AGENT_API_TOKEN:-}"]
+  market-mcp:
+    build: .
+    command: uvicorn mcp_servers.market.main:fast_app --host 0.0.0.0 --port 8102
+    ports: ["8102:8102"]
+    environment: [MCP_SERVER=market, "AGENT_API_TOKEN=${AGENT_API_TOKEN:-}"]
+  estimates-news-mcp:
+    build: .
+    command: uvicorn mcp_servers.estimates_news.main:fast_app --host 0.0.0.0 --port 8103
+    ports: ["8103:8103"]
+    # ALPHA_VANTAGE_API_KEY is read from the local .env file on the host
+    # (git-ignored, never copied into the image or the zip). Empty = keyless
+    # Nasdaq path + GOOGL range fallback still work.
+    environment: [MCP_SERVER=estimates_news, "ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}", "AGENT_API_TOKEN=${AGENT_API_TOKEN:-}"]
+  ui:
+    build: .
+    command: streamlit run apps/ui/app.py --server.port 8501 --server.address 0.0.0.0
+    ports: ["8501:8501"]
+    profiles: ["ui"]
+    environment: [ORCHESTRATOR_URL=http://orchestrator:8000, "AGENT_API_TOKEN=${AGENT_API_TOKEN:-}"]
+    depends_on: [orchestrator]
