@@ -111,6 +111,14 @@ async def critique_async(pack: EvidencePack, analysis: Analysis, mcp_call=None) 
 
     # Per-claim staleness (mirror of critic.py): evidence more
     # than a year before quarter_end fails the claim.
+    #
+    # DEPLOY LESSON (Nov 2, 2026): two Workers Builds builds from
+    # dbd6ac1 both reported Success/Ready/Production yet served
+    # the PRE-fix code at the endpoint (proven by direct probes:
+    # the bad MSFT pack still PASSED, and a no-common-period
+    # pack still FAILED omission). Dashboard status is not
+    # proof — always verify a Critic change by POSTing a
+    # discriminating pack to the live endpoint.
     from datetime import timedelta
     if pack.quarter_end:
         cutoff = pack.quarter_end - timedelta(days=365)
