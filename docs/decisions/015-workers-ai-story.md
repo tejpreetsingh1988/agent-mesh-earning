@@ -56,6 +56,18 @@ OpenRouter chain:
   whose story_model names the Llama model. If it never
   appears, the fallback chain proves the wiring failed safe.
 
+## Correction (Nov 2, 2026, same day)
+The first model choice, `@cf/meta/llama-3.1-8b-instruct`,
+was wrong: live briefings returned AiError 5028 — that model
+ID was deprecated on 2026-05-30. The binding itself was
+proven by that error (the attempt reached Workers AI and got
+a real API error back, then fell through honestly). The
+replacement is the FP8-quantized variant,
+`@cf/meta/llama-3.1-8b-instruct-fp8`, which is a live catalog
+entry as of Nov 2, 2026. Lesson: verify model IDs against
+the current catalog and a live proof briefing, never from
+older write-ups.
+
 ## Verification
 After deploy: run briefings until one carries a Workers AI
 story_model (or several deterministic ones whose notes name a
