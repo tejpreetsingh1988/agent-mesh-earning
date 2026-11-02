@@ -20,7 +20,7 @@ async def _handler(payload: dict) -> dict:
     pack = EvidencePack.model_validate(pack_data)
     analysis = Analysis.model_validate(analysis_data)
     trace_id = payload.get("trace_id") or str(uuid.uuid4())
-    return write_briefing(pack, analysis, trace_id, story_result=await build_story_async(pack, analysis, api_key=worker_env_value("OPENROUTER_API_KEY"), ai=ai_binding(), gateway_url=worker_env_value("GATEWAY_OPENROUTER_URL"))).model_dump(mode="json")
+    return write_briefing(pack, analysis, trace_id, story_result=await build_story_async(pack, analysis, api_key=worker_env_value("OPENROUTER_API_KEY"), ai=ai_binding())).model_dump(mode="json")
 
 
 app = create_app("writer", async_handler=_handler)
