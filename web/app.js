@@ -417,12 +417,15 @@ document.querySelectorAll(".chip").forEach((chip) => {
 // query for the session, so the free query pool (1,000
 // semantic/month) is never burned by typing.
 //
-// Response-shape note: the parser below is deliberately
-// tolerant (several field names, ticker from the source URL
-// or from "Ticker: XXX" in the chunk text) because the live
-// response shape is confirmed by probing once the index holds
-// documents, not assumed from docs. If the probe shows a
-// different shape, this parser is the one place to fix.
+// Response shape, confirmed by a live probe Nov 2, 2026
+// ("Apple" query): {success, result: {query_kind,
+// search_query, chunks: [{text, item: {key: <page URL>},
+// score, instance_id, ...}]}}. The ticker comes from the
+// chunk's page URL (/companies/<TICKER>) or from "Ticker:
+// XXX" in its text; the directory-index chunk matches neither
+// and is skipped. Chunks arrive score-ordered; the first
+// matches are shown, the user picks. If the shape ever
+// changes, this parser is the one place to fix.
 const SEARCH_URL = "https://ns-cc6b2129-061a-495e-bfa6-d2a47919f37a.search.ai.cloudflare.com/search";
 const searchCache = new Map();
 let searching = false;
@@ -437,6 +440,7 @@ function itemText(item) {
 
 function itemSource(item) {
   if (!item || typeof item !== "object") return "";
+  if (item.item && typeof item.item.key === "string" && item.item.key) return item.item.key;
   const meta = item.metadata || {};
   for (const key of ["url", "source", "filename", "key", "name"]) {
     if (typeof item[key] === "string" && item[key]) return item[key];
@@ -496,7 +500,8 @@ async function searchCompanies() {
     });
     if (!resp.ok) throw new Error(`Search failed (HTTP ${resp.status})`);
     const body = await resp.json();
-    const items = body.data || body.results || body.chunks || [];
+    const result = body.result || {};
+    const items = result.chunks || body.data || body.results || body.chunks || [];
     const seen = new Set();
     const matches = [];
     for (const item of items) {
