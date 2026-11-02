@@ -139,6 +139,85 @@ def fetch_concept(cik: int, tag: str) -> dict:
         return json.loads(raw)
 
 
+def fetch_companyfacts(cik: int) -> dict:
+    """Fetch the whole companyfacts payload for one CIK.
+
+    This is the fallback source for the Visa case (Nov 2, 2026):
+    EDGAR's per-tag companyconcept endpoint returned EMPTY units
+    (valid JSON, HTTP 200) for Visa's current revenue and
+    operating-income tags, while companyfacts held full current
+    data for the same tags. The payload is a few MB and holds
+    every tag, so callers must read ONLY the ALTERNATE_TAGS they
+    need from it — never parse all ~600 tags.
+    """
+    url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        raw = resp.read()
+        if resp.headers.get("Content-Encoding") == "gzip":
+            raw = gzip.decompress(raw)
+        return json.loads(raw)
+
+
+def companyfacts_tag_units(companyfacts: dict, tag: str) -> dict:
+    """Units dict for one tag inside a companyfacts payload, or {}."""
+    try:
+        return companyfacts["facts"]["us-gaap"][tag]["units"] or {}
+    except Exception:
+        return {}
+
+
+# A companyconcept pick is "implausibly stale" when its newest
+# row is more than this many days before the earnings report
+# date. 400 days is deliberately generous: a normal pick sits
+# within ~120 days of the filing, and even a ticker whose XBRL
+# lags a quarter sits within ~180 days — so the fallback fires
+# only for genuinely broken picks like Visa's 2019 rows.
+STALE_PICK_DAYS = 400
+
+
+def needs_companyfacts_fallback(picked, report_date: str | None) -> bool:
+    """True when the companyconcept pick must not be trusted.
+
+    Fires on an empty pick (no tag had rows) or on a stale pick
+    (newest row > STALE_PICK_DAYS before report_date). With no
+    report_date the staleness check cannot run, so only an empty
+    pick triggers — callers that know the filing date should
+    always pass it, or a stale pick silently survives.
+    """
+    if picked is None:
+        return True
+    if not report_date:
+        return False
+    try:
+        ref = date.fromisoformat(report_date[:10])
+        latest = date.fromisoformat(picked[1][0]["period_end"])
+    except Exception:
+        return False
+    return (ref - latest).days > STALE_PICK_DAYS
+
+
+def _rows_from_payload(payload: dict, metric: str) -> list[dict]:
+    """Quarterly rows (plus derived Q4s) from one concept payload.
+
+    Shared by the companyconcept loop and the companyfacts
+    fallback loop: both payloads carry the same `units` shape,
+    so a synthetic {"units": units} companyfacts tag payload
+    parses identically. Returns newest first, or [] when the
+    payload holds no quarterly-duration 10-Q row.
+    """
+    rows = parse_concept_rows(payload, metric)
+    if not rows:
+        return []
+    rows = list(rows)
+    seen = {r["period_end"] for r in rows}
+    for derived in derive_q4_rows(payload, metric):
+        if derived["period_end"] not in seen:
+            rows.append(derived)
+    rows.sort(key=lambda r: r["period_end"] or "", reverse=True)
+    return rows
+
+
 def derive_q4_rows(concept: dict, metric: str) -> list[dict]:
     """Derive Q4 as FY minus 9-month YTD, from one concept payload.
 
@@ -184,7 +263,7 @@ def derive_q4_rows(concept: dict, metric: str) -> list[dict]:
     return out
 
 
-def get_filing_facts_for_ticker(ticker: str) -> dict:
+def get_filing_facts_for_ticker(ticker: str, report_date: str = "") -> dict:
     """MCP-tool shape: ticker -> filing-verified facts.
 
     Resolves the CIK via mesh.edgar, runs get_quarterly_facts,
@@ -199,7 +278,9 @@ def get_filing_facts_for_ticker(ticker: str) -> dict:
     facts = edgar_mod.get_company_facts(ticker)
     if "error" in facts:
         return facts
-    quarterly = get_quarterly_facts(facts["cik"])
+    quarterly = get_quarterly_facts(
+        facts["cik"], report_date=report_date or None,
+        companyfacts_fetch=fetch_companyfacts)
     out = []
     for metric, data in quarterly.items():
         if metric == "missing":
@@ -245,7 +326,9 @@ def pick_latest_tag(candidates):
     return (best[0], best[2]) if best else None
 
 
-def get_quarterly_facts(cik: int, fetch=fetch_concept, limit: int = 8) -> dict:
+def get_quarterly_facts(cik: int, fetch=fetch_concept, limit: int = 8,
+                        report_date: str | None = None,
+                        companyfacts_fetch=None) -> dict:
     """Try every alternate tag per metric and keep the one whose
     rows reach the most recent quarter (see pick_latest_tag).
     Returns {metric: {tag, rows}} plus a `missing` list for
@@ -255,31 +338,59 @@ def get_quarterly_facts(cik: int, fetch=fetch_concept, limit: int = 8) -> dict:
     pass a fake that returns fixture payloads instead of hitting
     data.sec.gov. SEC's fair-access rule is 10 requests/second;
     callers should sleep ~0.1s between concept fetches.
+
+    `report_date` (the earnings filing date) plus
+    `companyfacts_fetch` enable the companyfacts fallback: when
+    a metric's companyconcept pick is empty or implausibly stale
+    (see needs_companyfacts_fallback), the same tags are re-read
+    from the one companyfacts payload and the pick is redone.
+    With companyfacts_fetch left unset there is no fallback —
+    that is what keeps existing tests hermetic.
     """
     result: dict = {}
     missing: list[str] = []
+    # The companyfacts payload is fetched lazily, at most once
+    # per run, and only when some metric's pick actually needs
+    # it — working tickers never pay the few-MB download.
+    _cf: list = []
+
+    def _companyfacts():
+        if not _cf:
+            try:
+                _cf.append(companyfacts_fetch(cik))
+            except Exception:
+                _cf.append(None)
+        return _cf[0]
+
     for metric, tags in ALTERNATE_TAGS.items():
         candidates = []
         for tag in tags:
             try:
                 payload = fetch(cik, tag)
-                rows = parse_concept_rows(payload, metric)
             except Exception:
                 continue
-            if not rows:
-                continue
-            rows = list(rows)
-            seen = {r["period_end"] for r in rows}
-            for derived in derive_q4_rows(payload, metric):
-                if derived["period_end"] not in seen:
-                    rows.append(derived)
-            rows.sort(key=lambda r: r["period_end"] or "", reverse=True)
-            candidates.append((tag, rows))
+            rows = _rows_from_payload(payload, metric)
+            if rows:
+                candidates.append((tag, rows))
         picked = pick_latest_tag(candidates)
+        fallback_tried = False
+        if companyfacts_fetch is not None and needs_companyfacts_fallback(picked, report_date):
+            cf = _companyfacts()
+            fallback_tried = cf is not None
+            if cf:
+                for tag in tags:
+                    rows = _rows_from_payload(
+                        {"units": companyfacts_tag_units(cf, tag)}, metric)
+                    if rows:
+                        candidates.append((tag, rows))
+                picked = pick_latest_tag(candidates)
         if picked:
             tag, rows = picked
             result[metric] = {"tag": tag, "rows": rows[:limit]}
         else:
-            missing.append(f"No quarterly-duration 10-Q row for {metric} (tried: {', '.join(tags)})")
+            note = f"No quarterly-duration 10-Q row for {metric} (tried: {', '.join(tags)})"
+            if fallback_tried:
+                note += " (companyfacts fallback also empty)"
+            missing.append(note)
     result["missing"] = missing
     return result

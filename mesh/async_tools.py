@@ -35,7 +35,10 @@ from .consensus import (
 from .edgar_facts import (
     ALTERNATE_TAGS,
     USER_AGENT as EDGAR_FACTS_UA,
+    _rows_from_payload,
+    companyfacts_tag_units,
     derive_q4_rows,
+    needs_companyfacts_fallback,
     parse_concept_rows,
     pick_latest_tag,
 )
@@ -157,48 +160,78 @@ async def _fetch_concept(cik: int, tag: str) -> dict:
     return await fetch_json(url, headers={"User-Agent": EDGAR_FACTS_UA})
 
 
-async def async_get_quarterly_facts(cik: int, limit: int = 8) -> dict:
+async def _fetch_companyfacts(cik: int) -> dict:
+    """Async mirror of edgar_facts.fetch_companyfacts."""
+    url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
+    return await fetch_json(url, headers={"User-Agent": EDGAR_FACTS_UA})
+
+
+async def async_get_quarterly_facts(cik: int, limit: int = 8,
+                                    report_date: str | None = None,
+                                    companyfacts_fetch=None) -> dict:
     """Async mirror of edgar_facts.get_quarterly_facts, with the
-    same recency-aware tag pick (see pick_latest_tag). Tag
-    fetches run concurrently: a ticker can need up to 10 concept
-    payloads, and fetching them one by one was the slowest part
-    of the Scout Worker. gather preserves tag order, so the
-    tie-break (earlier-priority tag stands) still holds."""
+    same recency-aware tag pick (see pick_latest_tag) and the
+    same companyfacts fallback (see needs_companyfacts_fallback).
+    Tag fetches run concurrently: a ticker can need up to 10
+    concept payloads, and fetching them one by one was the
+    slowest part of the Scout Worker. gather preserves tag
+    order, so the tie-break (earlier-priority tag stands)
+    still holds. The companyfacts payload is fetched lazily,
+    at most once per run, only when some metric's pick needs
+    it — the fallback loop itself is sequential over tags,
+    which is fine because it runs rarely and on small rows."""
     result: dict = {}
     missing: list[str] = []
+    _cf: list = []
+
+    async def _companyfacts():
+        if not _cf:
+            try:
+                _cf.append(await companyfacts_fetch(cik))
+            except Exception:
+                _cf.append(None)
+        return _cf[0]
+
     for metric, tags in ALTERNATE_TAGS.items():
         async def _one(tag):
             try:
                 payload = await _fetch_concept(cik, tag)
-                rows = parse_concept_rows(payload, metric)
             except Exception:
                 return (tag, [])
-            if not rows:
-                return (tag, [])
-            rows = list(rows)
-            seen = {r["period_end"] for r in rows}
-            for derived in derive_q4_rows(payload, metric):
-                if derived["period_end"] not in seen:
-                    rows.append(derived)
-            rows.sort(key=lambda r: r["period_end"] or "", reverse=True)
-            return (tag, rows)
+            return (tag, _rows_from_payload(payload, metric))
         candidates = await asyncio.gather(*[_one(tag) for tag in tags])
         picked = pick_latest_tag(candidates)
+        fallback_tried = False
+        if companyfacts_fetch is not None and needs_companyfacts_fallback(picked, report_date):
+            cf = await _companyfacts()
+            fallback_tried = cf is not None
+            if cf:
+                for tag in tags:
+                    rows = _rows_from_payload(
+                        {"units": companyfacts_tag_units(cf, tag)}, metric)
+                    if rows:
+                        candidates.append((tag, rows))
+                picked = pick_latest_tag(candidates)
         if picked:
             tag, rows = picked
             result[metric] = {"tag": tag, "rows": rows[:limit]}
         else:
-            missing.append(f"No quarterly-duration 10-Q row for {metric} (tried: {', '.join(tags)})")
+            note = f"No quarterly-duration 10-Q row for {metric} (tried: {', '.join(tags)})"
+            if fallback_tried:
+                note += " (companyfacts fallback also empty)"
+            missing.append(note)
     result["missing"] = missing
     return result
 
 
-async def async_get_filing_facts(ticker: str) -> dict:
+async def async_get_filing_facts(ticker: str, report_date: str = "") -> dict:
     """Async mirror of edgar_facts.get_filing_facts_for_ticker."""
     facts = await async_get_company_facts(ticker)
     if "error" in facts:
         return facts
-    quarterly = await async_get_quarterly_facts(facts["cik"])
+    quarterly = await async_get_quarterly_facts(
+        facts["cik"], report_date=report_date or None,
+        companyfacts_fetch=_fetch_companyfacts)
     out = []
     for metric, data in quarterly.items():
         if metric == "missing":
