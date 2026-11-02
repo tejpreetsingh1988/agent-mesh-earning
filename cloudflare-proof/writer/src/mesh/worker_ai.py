@@ -20,15 +20,24 @@ locally — where the `workers` module does not exist — this
 whole path is simply absent and the OpenRouter chain runs
 unchanged.
 
-Model choice: `@cf/meta/llama-3.1-8b-instruct`. It is NOT one
-of the seven frontier models that require a paid billing method
-(Kimi K2.6/K2.7, GLM 5.2/5.3/5.3-flash, DeepSeek V4
+Model choice: `@cf/meta/llama-3.1-8b-instruct-fp8`. It is NOT
+one of the seven frontier models that require a paid billing
+method (Kimi K2.6/K2.7, GLM 5.2/5.3/5.3-flash, DeepSeek V4
 Flash/Pro), and at ~490 replies/day of this size on the free
 10,000-neuron allowance it is the cheapest model that can
 plausibly write a validated story. If it fails validation
 repeatedly in production, the next step up is Llama 3.3 70B
 (~83/day) or gpt-oss-120b (far fewer/day) — same code, only
 the model name changes.
+
+Model-ID churn, learned Nov 2, 2026: the first choice,
+`@cf/meta/llama-3.1-8b-instruct` (no -fp8 suffix), returned
+AiError 5028 live — deprecated on 2026-05-30 — even though
+older write-ups still cite it. The FP8-quantized variant is
+the live catalog entry as of Nov 2, 2026. Model IDs are
+therefore verified against the current catalog
+(developers.cloudflare.com/workers-ai/models) and by a live
+proof briefing, never from memory or older articles.
 
 Failure contract, stated plainly: a Workers AI failure — a
 missing binding, a raised exception, a validation failure —
@@ -42,7 +51,7 @@ story happened when it did not.
 
 import time
 
-WORKERS_AI_MODEL = "@cf/meta/llama-3.1-8b-instruct"
+WORKERS_AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
 WORKERS_AI_TIMEOUT_S = 60
 
 
