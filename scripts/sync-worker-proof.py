@@ -81,22 +81,23 @@ def _writer() -> None:
     # Worker, so build_story_async's os.environ fallback alone
     # always yields the deterministic story in the cloud (see
     # mesh/worker_env.py and docs/decisions/011-worker-env.md).
-    # Workers AI first (binding, no key), OpenRouter as fallback:
-    # ai_binding() returns None locally and in Workers without
-    # the ai binding declared, so the OpenRouter path is
-    # unchanged there (see mesh/worker_ai.py, ADR 015).
-    # The OpenRouter fallback is routed via AI Gateway when the
-    # GATEWAY_OPENROUTER_URL Worker variable is set (BYOK key,
-    # analytics, caching); otherwise it goes direct with the
-    # key header (see ADR 016). The variable is set in the
-    # dashboard, never baked into the repo.
+    # Workers AI first (binding, no key), then the OpenRouter
+    # chain through AI Gateway via the binding (dynamic routes,
+    # gateway supplies the stored key — see
+    # mesh/gateway_binding.py, ADR 016 addendum), then direct
+    # OpenRouter with the key header. ai_binding() returns None
+    # locally and in Workers without the ai binding declared, so
+    # the direct path is unchanged there (see mesh/worker_ai.py,
+    # ADR 015). The GATEWAY_OPENROUTER_URL variable is no longer
+    # read: the first gateway attempt (HTTPS, no header) 401'd
+    # under Authenticated Gateway, and the binding replaces it.
     base = base.replace("return write_briefing(pack, analysis, trace_id).model_dump(mode=\"json\")",
-                        "return write_briefing(pack, analysis, trace_id, story_result=await build_story_async(pack, analysis, api_key=worker_env_value(\"OPENROUTER_API_KEY\"), ai=ai_binding(), gateway_url=worker_env_value(\"GATEWAY_OPENROUTER_URL\"))).model_dump(mode=\"json\")")
+                        "return write_briefing(pack, analysis, trace_id, story_result=await build_story_async(pack, analysis, api_key=worker_env_value(\"OPENROUTER_API_KEY\"), ai=ai_binding())).model_dump(mode=\"json\")")
     base = base.replace('app = create_app("writer", handler=_handler)',
                         'app = create_app("writer", async_handler=_handler)')
     _sync("writer",
           ["__init__.py", "schemas.py", "writer.py", "llm.py", "story_async.py",
-           "worker_env.py", "worker_ai.py",
+           "worker_env.py", "worker_ai.py", "gateway_binding.py",
            "agent_app.py", "cards.py", "auth.py", "worker_http.py"],
           base + ENTRYPOINT)
 
