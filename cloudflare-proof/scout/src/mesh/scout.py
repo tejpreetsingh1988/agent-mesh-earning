@@ -153,7 +153,7 @@ def collect_evidence(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
     # The old "not yet parsed" note below disappears automatically
     # when at least one EDGAR fact lands (publisher == "SEC EDGAR").
     try:
-        filing_facts = mcp_call("filings", "get_filing_facts", {"ticker": t})
+        filing_facts = mcp_call("filings", "get_filing_facts", {"ticker": t, "report_date": report_date_str})
         if isinstance(filing_facts, dict) and not filing_facts.get("error"):
             by_key = {(f.metric, f.period): f for f in facts_list}
             for ff in (filing_facts.get("facts") or []):

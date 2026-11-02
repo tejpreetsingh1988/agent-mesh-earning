@@ -93,7 +93,7 @@ async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> Ev
             "ticker": t, "accession": filing.get("accessionNumber"),
             "primary_document": filing.get("primaryDocument"), "max_chars": 12000}),
         mcp_call("market", "get_quarterly_history", {"ticker": t, "quarters": 8}),
-        mcp_call("filings", "get_filing_facts", {"ticker": t}),
+        mcp_call("filings", "get_filing_facts", {"ticker": t, "report_date": report_date_str}),
         mcp_call("market", "get_price_reaction", {"ticker": t, "report_date": report_date_str}),
         mcp_call("estimates_news", "get_consensus_estimates",
                  {"ticker": t, "quarter": "", "report_date": report_date_str}),
