@@ -39,6 +39,28 @@ def worker_env_value(name: str) -> str | None:
     return None
 
 
+def ai_binding():
+    """Return the Workers AI binding (env.AI), or None.
+
+    Same guarded pattern as worker_env_value: locally the
+    `workers` module does not exist, so this returns None and
+    callers skip the Workers AI attempt. A binding object is
+    returned as-is (it is not a string, so worker_env_value's
+    string check would wrongly reject it). If the binding is
+    present but unusable, the caller's try/except handles it —
+    a Workers AI failure falls through to OpenRouter, never
+    breaks the briefing.
+    """
+    try:
+        from workers import env as _worker_env
+    except ImportError:
+        return None
+    try:
+        return getattr(_worker_env, "AI", None)
+    except Exception:
+        return None
+
+
 def effective_api_key(name: str = "OPENROUTER_API_KEY") -> str | None:
     """Worker env value first, process environment second.
 
