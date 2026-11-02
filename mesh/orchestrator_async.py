@@ -11,12 +11,21 @@ Worker proof and by tests.
 Progress events: pass on_event to receive one dict per step
 (scout_started, scout_done, analyst_done, critic_attempt,
 writer_done). The SSE endpoint on the Orchestrator Worker
-forwards these to the browser as the live log; errors are NOT
-emitted here — they propagate to the caller, which turns them
-into the stream's error event, so a failed run still ends the
-stream cleanly instead of hanging it.
+forwards these to the browser. Each event carries the step's
+OUTCOME, not just its name, so the frontend can render each
+agent's card the moment it finishes instead of waiting for
+the final briefing: scout_done carries the fact list,
+analyst_done the claim list, critic_attempt the verdict and
+issue list, writer_done the story and its model — plus
+duration_ms, how long that agent's call took. The old count
+keys (facts, claims) stay exactly as they were, so existing
+consumers keep working. Errors are NOT emitted here — they
+propagate to the caller, which turns them into the stream's
+error event, so a failed run still ends the stream cleanly
+instead of hanging it.
 """
 import asyncio
+import time
 import uuid
 
 from .orchestrator import CriticFailed
@@ -43,40 +52,68 @@ async def run_briefing_async(ticker: str, scout_fn, analyst_fn, critic_fn, write
     called once per pipeline step with the step's outcome."""
     trace_id = str(uuid.uuid4())
     await _emit(on_event, {"event": "scout_started", "ticker": ticker})
+    started = time.monotonic()
     pack_data = await scout_fn(ticker)
+    scout_ms = int((time.monotonic() - started) * 1000)
     pack = EvidencePack.model_validate(pack_data)
     await _emit(on_event, {"event": "scout_done", "status": pack.status,
-                           "facts": len(pack.facts)})
+                           "facts": len(pack.facts),
+                           "duration_ms": scout_ms,
+                           "quarter_label": pack.quarter_label,
+                           "company_name": pack.company_name,
+                           "transcript_status": (pack.transcript or {}).get("status")
+                           if isinstance(pack.transcript, dict) else
+                           getattr(pack.transcript, "status", None),
+                           "fact_list": pack.model_dump(mode="json")["facts"]})
     if pack.status != "REPORTED":
         raise ValueError(f"NOT_REPORTED_YET for {ticker}: {pack.missing}")
+    started = time.monotonic()
     analysis_data = await analyst_fn(pack_data)
+    analyst_ms = int((time.monotonic() - started) * 1000)
     analysis = Analysis.model_validate(analysis_data)
     await _emit(on_event, {"event": "analyst_done",
-                           "claims": len(analysis.claims)})
+                           "claims": len(analysis.claims),
+                           "duration_ms": analyst_ms,
+                           "claim_list": analysis.model_dump(mode="json")["claims"]})
 
     attempts = 0
     while attempts < 2:
         attempts += 1
+        started = time.monotonic()
         critique_data = await critic_fn(pack_data, analysis_data)
+        critic_ms = int((time.monotonic() - started) * 1000)
         await _emit(on_event, {"event": "critic_attempt", "attempt": attempts,
-                               "verdict": critique_data.get("verdict")})
+                               "verdict": critique_data.get("verdict"),
+                               "duration_ms": critic_ms,
+                               "issue_list": critique_data.get("issues", [])})
         if critique_data.get("verdict") == "PASS":
             break
         if attempts >= 2:
             raise CriticFailed(critique_data.get("issues", []))
+        started = time.monotonic()
         analysis_data = await analyst_fn(pack_data)
+        analyst_ms = int((time.monotonic() - started) * 1000)
         analysis = Analysis.model_validate(analysis_data)
         await _emit(on_event, {"event": "analyst_done",
-                               "claims": len(analysis.claims)})
+                               "claims": len(analysis.claims),
+                               "duration_ms": analyst_ms,
+                               "claim_list": analysis.model_dump(mode="json")["claims"]})
     else:
         raise CriticFailed(critique_data.get("issues", []))
 
+    started = time.monotonic()
     if writer_fn is not None:
         briefing_data = await writer_fn(pack_data, analysis_data, trace_id)
+        writer_ms = int((time.monotonic() - started) * 1000)
         await _emit(on_event, {"event": "writer_done",
-                               "story_model": briefing_data.get("story_model")})
+                               "story_model": briefing_data.get("story_model"),
+                               "duration_ms": writer_ms,
+                               "story": briefing_data.get("story", "")})
         return Briefing.model_validate(briefing_data)
     briefing = write_briefing(pack, analysis, trace_id)
+    writer_ms = int((time.monotonic() - started) * 1000)
     await _emit(on_event, {"event": "writer_done",
-                           "story_model": briefing.story_model})
+                           "story_model": briefing.story_model,
+                           "duration_ms": writer_ms,
+                           "story": briefing.story})
     return briefing
