@@ -88,6 +88,38 @@ yfinance/pandas in Pyodide, the Streamlit UI (Workers cannot run
 Streamlit), SSE streaming through a Worker, or the 9-service
 topology over service bindings. Each is a separate, later test.
 
+## Full app: Critic, Writer, Orchestrator Workers + Pages frontend
+
+The same proof pattern extends to the rest of the pipeline
+(see ADR 010): `critic/` (async re-query via async_tools),
+`writer/` (story via direct OpenRouter POST — no LangChain
+and no urllib in a Worker), and `orchestrator/` (async
+run_briefing over the four agent Workers' public URLs, with
+CORS on so the browser frontend can call it). Each project
+deploys with `cd cloudflare-proof/<name> && uv run pywrangler deploy`
+and needs its Production workers.dev toggle on, exactly as
+Analyst and Scout did. Workers Builds auto-deploys on push
+to main once the project exists.
+
+The frontend is `web/` at the repo root: static HTML/CSS/JS,
+no build step. Deploy it as a Cloudflare Pages project
+connected to the same repo, framework None, build command
+empty, build output directory `web`. It POSTs a ticker to
+the Orchestrator Worker and renders the Briefing JSON. If
+the Workers were created under different project names,
+change the one URL at the top of `web/app.js`.
+
+Writer story key (unproven in-Worker): the Writer reads
+OPENROUTER_API_KEY from the process environment, i.e. a
+secret set on the Writer Worker (dashboard Settings →
+Variables → Secrets). Cloudflare documents env via the
+WorkerEntrypoint `env` attribute, not os.environ, so the
+live run reveals it in `story_model`: a model name means
+the key was visible; "deterministic (no OPENROUTER_API_KEY
+configured)" means it was not, and the briefing is still
+complete. Never put the key in code, in the frontend, or
+in a Worker-to-Worker request body.
+
 ## Auth note
 
 With no `AGENT_API_TOKEN` secret set, the service accepts requests (auth
