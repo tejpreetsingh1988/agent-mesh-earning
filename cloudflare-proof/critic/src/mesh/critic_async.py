@@ -11,6 +11,8 @@ The sync critique stays untouched for Docker and the eval
 harness. This module is imported only by the Cloudflare Critic
 Worker proof and by tests.
 """
+import asyncio
+
 from .critic import _pct
 from .schemas import Analysis, Critique, EvidencePack
 
@@ -178,10 +180,23 @@ async def critique_async(pack: EvidencePack, analysis: Analysis, mcp_call=None) 
     if price_entries and not closes:
         fail("overclaim", "Price reaction claim exists but pack has no closes to compute it from.")
 
-    # 7. Independent re-query (best effort, recorded honestly)
+    # 7. Independent re-query (best effort, recorded honestly).
+    # The three calls are independent, so they run concurrently
+    # and are processed in the old order — rechecked[] and the
+    # warn notes keep their old sequence even though the calls
+    # overlap. return_exceptions=True keeps one failure from
+    # cancelling the other two.
     if mcp_call is not None:
+        cf, lf, cons_live = await asyncio.gather(
+            mcp_call("filings", "get_company_facts", {"ticker": pack.ticker}),
+            mcp_call("filings", "get_latest_earnings_filing", {"ticker": pack.ticker}),
+            mcp_call("estimates_news", "get_consensus_estimates",
+                     {"ticker": pack.ticker, "quarter": pack.quarter_label,
+                      "report_date": pack.report_date.date().isoformat()}),
+            return_exceptions=True)
         try:
-            cf = await mcp_call("filings", "get_company_facts", {"ticker": pack.ticker})
+            if isinstance(cf, Exception):
+                raise cf
             if isinstance(cf, dict) and cf.get("company_name") == pack.company_name:
                 rechecked.append("company_name matches filings-mcp")
             else:
@@ -189,7 +204,8 @@ async def critique_async(pack: EvidencePack, analysis: Analysis, mcp_call=None) 
         except Exception as e:
             warn("requery", f"filings-mcp re-query failed: {e} — live verification not completed for company facts.")
         try:
-            lf = await mcp_call("filings", "get_latest_earnings_filing", {"ticker": pack.ticker})
+            if isinstance(lf, Exception):
+                raise lf
             if isinstance(lf, dict) and lf.get("filingDate") == pack.report_date.date().isoformat():
                 rechecked.append("latest filing date matches filings-mcp")
             elif isinstance(lf, dict) and lf.get("filingDate"):
@@ -197,9 +213,8 @@ async def critique_async(pack: EvidencePack, analysis: Analysis, mcp_call=None) 
         except Exception as e:
             warn("requery", f"filings-mcp latest-filing re-query failed: {e}.")
         try:
-            cons_live = await mcp_call("estimates_news", "get_consensus_estimates",
-                                       {"ticker": pack.ticker, "quarter": pack.quarter_label,
-                                        "report_date": pack.report_date.date().isoformat()})
+            if isinstance(cons_live, Exception):
+                raise cons_live
             if isinstance(cons_live, dict) and cons_live.get("eps_estimate") is not None and isinstance(cons, dict) and cons.get("eps_estimate") is not None:
                 if float(cons_live["eps_estimate"]) == float(cons["eps_estimate"]):
                     rechecked.append("consensus EPS estimate matches estimates-news-mcp re-query")
