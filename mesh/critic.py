@@ -123,13 +123,44 @@ def critique(pack: EvidencePack, analysis: Analysis, mcp_call=None) -> Critique:
     revs = facts_by_metric.get("total_revenue", [])
     opincs = facts_by_metric.get("operating_income", [])
     if revs and opincs:
-        cur_rev, cur_op = revs[-1], next((f for f in opincs if f.period == revs[-1].period), opincs[-1])
-        expected = cur_op.value / cur_rev.value * 100.0 if cur_rev.value else None
+        # Margin is only recomputable for a period both metrics
+        # share. The old fallback (latest operating income of any
+        # period) recomputed MSFT's 230.1% margin as correct.
+        rev_periods = {f.period for f in revs}
+        opinc_by_period = {f.period: f for f in opincs}
+        common = sorted(p for p in rev_periods if p in opinc_by_period)
         c = find_claim("Operating margin")
-        if c is None:
-            fail("omission", "Pack has revenue + operating income but Analysis has no margin claim.")
-        elif c.value is None or expected is None or abs(c.value - expected) > 0.5:
-            fail("arithmetic", f"Operating margin claim {c.value} does not match recomputed {expected}.")
+        if not common:
+            if c is not None:
+                fail("margin", "Operating margin claim exists but revenue and operating income share no filed period — the margin cannot be recomputed.")
+            # No omission fail here: with no common period, a
+            # correct Analysis has no margin claim (analyst.py).
+        else:
+            cur_rev = next(f for f in revs if f.period == common[-1])
+            cur_op = opinc_by_period[common[-1]]
+            expected = cur_op.value / cur_rev.value * 100.0 if cur_rev.value else None
+            if c is None:
+                fail("omission", "Pack has revenue + operating income for a common period but Analysis has no margin claim.")
+            elif c.value is None or expected is None or abs(c.value - expected) > 0.5:
+                fail("arithmetic", f"Operating margin claim {c.value} does not match recomputed {expected}.")
+
+    # Per-claim staleness: a claim whose evidence all predates
+    # the reported quarter by more than a year is not a claim
+    # about that quarter. Pack-level staleness looks at the
+    # newest fact of ANY metric, so one current metric masked
+    # MSFT revenue from 2010 inside a briefing labelled Q3 2026.
+    # Evidence-free claims (consensus, price reaction) are
+    # exempt by design — their freshness is covered by the
+    # claims that do cite facts.
+    from datetime import timedelta
+    if pack.quarter_end:
+        cutoff = pack.quarter_end - timedelta(days=365)
+        facts_by_id = {f.id: f for f in pack.facts}
+        for c in analysis.claims:
+            periods = [parse_period(facts_by_id[e].period) for e in c.evidence_ids
+                       if e in facts_by_id and parse_period(facts_by_id[e].period) is not None]
+            if periods and max(periods) < cutoff:
+                fail("staleness", f"Claim '{c.text[:60]}' cites only facts up to {max(periods)} — more than a year before the reported quarter ending {pack.quarter_end}.")
 
     # 3+4. EPS basis and consensus reflection
     cons = pack.consensus or {}
