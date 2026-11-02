@@ -46,7 +46,17 @@ from .worker_http import post_json
 MODEL_TIMEOUT_S = 60
 
 
-async def _call_openrouter_async(model: str, system: str, user: str, api_key: str) -> dict:
+async def _call_openrouter_async(model: str, system: str, user: str, api_key: str,
+                                 gateway_url: str | None = None) -> dict:
+    """OpenRouter call, direct or via AI Gateway.
+
+    gateway_url is the full gateway endpoint (a Worker variable,
+    never baked into the repo). With a gateway, the stored
+    provider key (BYOK) supplies the OpenRouter key, so NO
+    Authorization header is sent — the key no longer travels
+    from the Worker at all. Without a gateway, the direct URL
+    and the key header are used exactly as before.
+    """
     started = time.monotonic()
     payload = {
         "model": model,
@@ -54,11 +64,16 @@ async def _call_openrouter_async(model: str, system: str, user: str, api_key: st
         "temperature": 0.2,
         "max_tokens": 1800,
     }
-    body = await post_json(API_URL, payload, headers={
-        "Authorization": f"Bearer {api_key}",
+    headers = {
         "HTTP-Referer": "https://example.com/agent-mesh-earnings",
         "X-Title": "Agent Mesh Earnings",
-    })
+    }
+    url = API_URL
+    if gateway_url:
+        url = gateway_url
+    else:
+        headers["Authorization"] = f"Bearer {api_key}"
+    body = await post_json(url, payload, headers=headers)
     if isinstance(body, dict) and body.get("error"):
         err = body["error"]
         raise RuntimeError(f"OpenRouter error {err.get('code', '')}: {err.get('message', '')}")
@@ -70,7 +85,8 @@ async def _call_openrouter_async(model: str, system: str, user: str, api_key: st
 
 
 async def build_story_async(pack, analysis, llm_call=None, api_key: str | None = None,
-                            ai=None, ai_model: str = WORKERS_AI_MODEL) -> dict:
+                            ai=None, ai_model: str = WORKERS_AI_MODEL,
+                            gateway_url: str | None = None) -> dict:
     """Async twin of llm.build_story. llm_call(model, system, user)
     -> awaitable dict is injected by tests; in production it
     defaults to the direct OpenRouter POST above.
@@ -79,7 +95,11 @@ async def build_story_async(pack, analysis, llm_call=None, api_key: str | None =
     (no key, no third-party rate limit), then the OpenRouter
     chain, then the deterministic story. A Workers AI failure —
     exception or validation failure — is recorded and falls
-    through, never breaking the briefing."""
+    through, never breaking the briefing. The OpenRouter chain
+    itself is routed via AI Gateway when gateway_url is given
+    (BYOK key, analytics, caching), and direct otherwise; the
+    story_model label says "(via AI Gateway)" when the gateway
+    wrote the story, so gateway use is visible in the briefing."""
     key = api_key if api_key is not None else os.environ.get("OPENROUTER_API_KEY", "")
     system, user = _prompt(pack, analysis)
     errors: list[str] = []
@@ -106,7 +126,7 @@ async def build_story_async(pack, analysis, llm_call=None, api_key: str | None =
         return {"story": deterministic_story(pack, analysis),
                 "model": f"deterministic{suffix}",
                 "tokens_in": None, "tokens_out": None, "latency_s": None}
-    caller = llm_call or (lambda model, s, u: _call_openrouter_async(model, s, u, key))
+    caller = llm_call or (lambda model, s, u: _call_openrouter_async(model, s, u, key, gateway_url))
     for model in MODELS:
         try:
             result = await asyncio.wait_for(caller(model, system, user), timeout=MODEL_TIMEOUT_S)
@@ -119,6 +139,8 @@ async def build_story_async(pack, analysis, llm_call=None, api_key: str | None =
             errors.append(f"{model}: validation failed: {reason}")
             continue
         note = " (fallback model)" if model != PRIMARY else ""
+        if gateway_url:
+            note += " (via AI Gateway)"
         return {"story": text.strip(),
                 "model": f"{result.get('model', model)}{note}",
                 "tokens_in": result.get("tokens_in"), "tokens_out": result.get("tokens_out"),
