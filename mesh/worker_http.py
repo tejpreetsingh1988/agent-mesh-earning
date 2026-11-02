@@ -26,7 +26,7 @@ import json
 import urllib.error
 import urllib.request
 
-__all__ = ["WorkerHTTPError", "fetch_bytes", "fetch_json", "fetch_text"]
+__all__ = ["WorkerHTTPError", "fetch_bytes", "fetch_json", "fetch_text", "post_json"]
 
 
 class WorkerHTTPError(Exception):
@@ -76,3 +76,31 @@ async def fetch_json(url: str, headers: dict | None = None):
 
 async def fetch_text(url: str, headers: dict | None = None) -> str:
     return (await fetch_bytes(url, headers=headers)).decode("utf-8", errors="ignore")
+
+
+async def post_json(url: str, payload: dict, headers: dict | None = None):
+    """POST a JSON body, return the decoded JSON response. Same
+    two transports as fetch_bytes: pyfetch in a Worker, urllib
+    on a thread elsewhere. Non-200 raises WorkerHTTPError, so
+    agent-call failures surface as errors, not as data."""
+    body = json.dumps(payload).encode("utf-8")
+    hdrs = {"Content-Type": "application/json"}
+    if headers:
+        hdrs.update(headers)
+    pyfetch = _pyfetch()
+    if pyfetch is not None:
+        resp = await pyfetch(url, method="POST", headers=hdrs, body=body)
+        if resp.status != 200:
+            raise WorkerHTTPError(resp.status, url)
+        return await resp.json()
+    def _sync():
+        req = urllib.request.Request(url, data=body, headers=hdrs, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                raw = r.read()
+                if r.headers.get("Content-Encoding") == "gzip":
+                    raw = gzip.decompress(raw)
+                return json.loads(raw)
+        except urllib.error.HTTPError as e:
+            raise WorkerHTTPError(e.code, url) from None
+    return await asyncio.to_thread(_sync)

@@ -13,14 +13,55 @@ from fastapi.responses import JSONResponse
 from .auth import is_authorized
 from .cards import CARDS
 
-def create_app(agent_name: str, handler=None, async_handler=None) -> FastAPI:
+class _CorsMiddleware:
+    """Minimal CORS for the browser frontend (Cloudflare Pages
+    calls the Orchestrator Worker cross-origin). Pure ASGI, no
+    new dependency, and deliberately allow-all: these proof
+    endpoints are public and carry no user data. Docker agents
+    keep cors=False (the default) and are unaffected."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        if scope["method"] == "OPTIONS":
+            async def _send(message):
+                if message["type"] == "http.response.start":
+                    headers = [(k, v) for k, v in message.get("headers", [])
+                               if k.lower() != b"access-control-allow-origin"]
+                    headers += [(b"access-control-allow-origin", b"*"),
+                                (b"access-control-allow-methods", b"GET, POST, OPTIONS"),
+                                (b"access-control-allow-headers", b"Content-Type, Authorization")]
+                    message = {**message, "headers": headers}
+                await send(message)
+            await _send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+            return
+
+        async def _send_with_cors(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                headers.append((b"access-control-allow-origin", b"*"))
+                message = {**message, "headers": headers}
+            await send(message)
+        await self.app(scope, receive, _send_with_cors)
+
+
+def create_app(agent_name: str, handler=None, async_handler=None, cors=False) -> FastAPI:
     """handler: sync callable (Docker agents, Analyst Worker).
     async_handler: awaitable callable (Scout Worker v2 — its tool
     calls are async fetch, which a sync endpoint cannot await in
     a Worker: no threads, no sync XHR). When async_handler is
     given, /tasks/send is an async endpoint; otherwise it stays
-    exactly the sync endpoint it has always been."""
+    exactly the sync endpoint it has always been.
+    cors=True wraps the app in _CorsMiddleware (Orchestrator
+    Worker only — the Pages frontend calls it cross-origin)."""
     app = FastAPI(title=f"earnings-{agent_name}")
+    if cors:
+        app.add_middleware(_CorsMiddleware)
     card = CARDS[agent_name]
 
     @app.get("/health")
