@@ -56,3 +56,28 @@ no credit card:
   come from EDGAR, which is the point.
 - Agent Card URLs are still Docker-internal (cosmetic,
   pre-existing).
+
+## Addendum — Error 1042 and the fetch flag (Nov 1, 2026, proven live)
+
+The first end-to-end Orchestrator run failed with HTTP 404
+for its Scout call, while the identical Scout request worked
+from outside. A temporary probe endpoint on the
+Orchestrator showed the truth: from inside a Worker, BOTH
+a POST to Scout /tasks/send and a GET to Scout /health
+returned Cloudflare "error code: 1042" — the runtime
+refuses a Worker fetching another Worker on the same
+account as ambiguous same-zone routing. The fix is the
+`global_fetch_strictly_public` compatibility flag on the
+CALLER's wrangler.jsonc (here, only the Orchestrator's):
+it sends sibling calls through the public path. After the
+flag deployed, the same probe returned 200 for both calls
+and a full REPORTED Scout pack. The flag is therefore
+required on any Worker that calls a sibling Worker by its
+public workers.dev URL; Workers that only call public
+internet hosts (EDGAR, Nasdaq, OpenRouter) do not need it.
+Service bindings are the documented alternative, but they
+need the WorkerEntrypoint `env`, which the asgi adapter
+does not hand to the FastAPI app — so the flag, not a
+binding, is the mechanism used here. The probe endpoint
+itself was removed after diagnosis; it never shipped in
+the final build.
