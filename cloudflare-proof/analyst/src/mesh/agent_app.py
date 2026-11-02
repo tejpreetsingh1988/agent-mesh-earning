@@ -13,7 +13,13 @@ from fastapi.responses import JSONResponse
 from .auth import is_authorized
 from .cards import CARDS
 
-def create_app(agent_name: str, handler=None) -> FastAPI:
+def create_app(agent_name: str, handler=None, async_handler=None) -> FastAPI:
+    """handler: sync callable (Docker agents, Analyst Worker).
+    async_handler: awaitable callable (Scout Worker v2 — its tool
+    calls are async fetch, which a sync endpoint cannot await in
+    a Worker: no threads, no sync XHR). When async_handler is
+    given, /tasks/send is an async endpoint; otherwise it stays
+    exactly the sync endpoint it has always been."""
     app = FastAPI(title=f"earnings-{agent_name}")
     card = CARDS[agent_name]
 
@@ -30,18 +36,36 @@ def create_app(agent_name: str, handler=None) -> FastAPI:
         return {"agent": agent_name, "card": "/.well-known/agent.json", "health": "/health",
                 "note": "Day 3: Scout + Analyst live; Critic/Writer/Orchestrator land Day 4/5." if handler else "Day 1 stub — agent logic lands Day 3-5 (see ARCHITECTURE.md)."}
 
-    @app.post("/tasks/send")
-    def tasks_send(payload: dict, request: Request):
-        task_id = str(uuid.uuid4())
-        if not is_authorized(request.headers):
-            return JSONResponse(status_code=401, content={"task_id": task_id, "state": "failed",
-                    "error": "Unauthorized: set AGENT_API_TOKEN in .env and send Authorization: Bearer <token>."})
-        if handler is None:
-            return JSONResponse(status_code=501, content={"task_id": task_id, "state": "failed",
-                    "error": "Agent logic not yet implemented. See ARCHITECTURE.md Day 4-5."})
-        try:
-            result = handler(payload)
-        except Exception as e:
-            return JSONResponse(status_code=500, content={"task_id": task_id, "state": "failed", "error": str(e)})
-        return {"task_id": task_id, "state": "completed", "result": result}
+    def _unauthorized(task_id):
+        return JSONResponse(status_code=401, content={"task_id": task_id, "state": "failed",
+                "error": "Unauthorized: set AGENT_API_TOKEN in .env and send Authorization: Bearer <token>."})
+
+    def _unimplemented(task_id):
+        return JSONResponse(status_code=501, content={"task_id": task_id, "state": "failed",
+                "error": "Agent logic not yet implemented. See ARCHITECTURE.md Day 4-5."})
+
+    if async_handler is not None:
+        @app.post("/tasks/send")
+        async def tasks_send_async(payload: dict, request: Request):
+            task_id = str(uuid.uuid4())
+            if not is_authorized(request.headers):
+                return _unauthorized(task_id)
+            try:
+                result = await async_handler(payload)
+            except Exception as e:
+                return JSONResponse(status_code=500, content={"task_id": task_id, "state": "failed", "error": str(e)})
+            return {"task_id": task_id, "state": "completed", "result": result}
+    else:
+        @app.post("/tasks/send")
+        def tasks_send(payload: dict, request: Request):
+            task_id = str(uuid.uuid4())
+            if not is_authorized(request.headers):
+                return _unauthorized(task_id)
+            if handler is None:
+                return _unimplemented(task_id)
+            try:
+                result = handler(payload)
+            except Exception as e:
+                return JSONResponse(status_code=500, content={"task_id": task_id, "state": "failed", "error": str(e)})
+            return {"task_id": task_id, "state": "completed", "result": result}
     return app
