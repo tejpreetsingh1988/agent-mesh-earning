@@ -11,17 +11,18 @@ Anything else — no key, a failed call, a failed validation —
 falls back to the deterministic story, with the model note saying
 so, exactly like build_story.
 
-Key handling, stated plainly: the key is read from
-OPENROUTER_API_KEY in the process environment. In a Worker that
-means a secret set on the Worker (dashboard: Settings →
-Variables → Secrets, or `wrangler secret put`). Whether the
-Python Worker runtime surfaces secrets into os.environ is NOT
-proven — the live Writer run will show it in story_model: a
-model name means the key was visible; "deterministic (no
-OPENROUTER_API_KEY configured)" means it was not, and the
-briefing is still complete, just without an LLM story. The key
-is never sent from the browser and never appears in a request
-payload between Workers.
+Key handling, stated plainly: build_story_async takes an explicit
+api_key, falling back to OPENROUTER_API_KEY in the process
+environment (the Docker path, where the host .env supplies it).
+In a Worker, dashboard secrets are NOT visible in os.environ —
+they live on the Worker env object — so the Writer Worker passes
+the key explicitly from mesh.worker_env.worker_env_value
+("OPENROUTER_API_KEY"), which reads the `workers.env` object.
+A model name in story_model means the key was visible; a
+"deterministic (no OPENROUTER_API_KEY configured)" note means
+it was not, and the briefing is still complete, just without an
+LLM story. The key is never sent from the browser and never
+appears in a request payload between Workers.
 
 Per-model timeout is 60s here (Docker uses 120s): a demo
 briefing should fail over to the next model — or to the
