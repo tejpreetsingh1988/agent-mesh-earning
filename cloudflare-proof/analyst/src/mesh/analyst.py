@@ -142,24 +142,37 @@ def analyse(pack: EvidencePack) -> Analysis:
             "Growth claims above are for that latest available period, named in each claim, not for the reported quarter. "
             "Do not present them as the reported quarter's results.")
 
-    # --- Margins: latest period with both revenue and operating income ---
+    # --- Margins: only a period where BOTH revenue and operating
+    # income are filed. The old code fell back to the latest
+    # operating income of ANY period when the latest revenue
+    # period had none — that is how MSFT got a 230.1% margin
+    # (2026 operating income divided by 2010 revenue). No common
+    # period means no margin claim, stated in risks, never a
+    # margin across different periods.
     revs = _by_metric(pack, "total_revenue")
     opincs = _by_metric(pack, "operating_income")
-    if revs and opincs:
-        cur_rev_d, cur_rev = revs[-1]
-        cur_op = next((f for _, f in opincs if parse_period(f.period) == cur_rev_d), opincs[-1][1])
+    rev_by_period = {d: f for d, f in revs}
+    opinc_by_period = {d: f for d, f in opincs}
+    common = sorted(set(rev_by_period) & set(opinc_by_period))
+    if common:
+        cur_rev, cur_op = rev_by_period[common[-1]], opinc_by_period[common[-1]]
         if cur_rev.value:
             margin = cur_op.value / cur_rev.value * 100.0
             add_claim(f"Operating margin ({cur_rev.period}): {margin:.1f}% ({_fmt(cur_op.value, cur_op.unit)} / {_fmt(cur_rev.value, cur_rev.unit)})",
                       margin, f"{cur_op.value} / {cur_rev.value} * 100, from facts {cur_op.id} and {cur_rev.id}.",
                       [cur_op.id, cur_rev.id])
+    elif revs and opincs:
+        risks.append("Revenue and operating income have no common filed period — no operating-margin claim (a margin across different periods would be meaningless).")
 
-    # --- CapEx vs operating income (latest period, if both present) ---
+    # --- CapEx vs operating income (latest common period, if both present) ---
     capex = _by_metric(pack, "capex")
     if capex and opincs:
-        cur_cap, cur_op = capex[-1][1], opincs[-1][1]
-        if cur_cap.value > cur_op.value:
-            risks.append(f"CapEx ({_fmt(cur_cap.value, cur_cap.unit)}) exceeded operating income ({_fmt(cur_op.value, cur_op.unit)}) in {cur_cap.period} — cash-flow watch, not a verdict on its own.")
+        cap_by_period = {d: f for d, f in capex}
+        common_cap = sorted(set(cap_by_period) & set(opinc_by_period))
+        if common_cap:
+            cur_cap, cur_op = cap_by_period[common_cap[-1]], opinc_by_period[common_cap[-1]]
+            if cur_cap.value > cur_op.value:
+                risks.append(f"CapEx ({_fmt(cur_cap.value, cur_cap.unit)}) exceeded operating income ({_fmt(cur_op.value, cur_op.unit)}) in {cur_cap.period} — cash-flow watch, not a verdict on its own.")
 
     # --- Beat/miss: revenue ---
     cons = pack.consensus or {}
