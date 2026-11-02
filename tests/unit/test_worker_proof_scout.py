@@ -1,9 +1,9 @@
-"""Cloudflare Worker proof: the vendored Scout copy must wire the same
-collect_evidence to in-process tools, and the direct client must
-dispatch every tool Scout uses. No live network here: the fake
-mcp_call stands in for direct_call, and the real Worker deploy is
-the remaining proof step (can a Worker reach EDGAR/Nasdaq at all
-via urllib, and does pywrangler bundle the stack?).
+"""Cloudflare Worker proof (v2): the vendored Scout copy must wire the
+async collect_evidence to in-process async tools, and the async
+client must dispatch every tool Scout uses. No live network here:
+the async fake stands in for async_direct_call, and the real
+Worker deploy is the remaining proof step (can a Worker reach
+EDGAR/Nasdaq at all via pyfetch — v1 proved sync urllib cannot).
 
 Import isolation note: the analyst proof test already imports a
 module named `worker` and a package named `mesh` in this same
@@ -13,6 +13,7 @@ vendored copy, import its `worker`, then restore the cache and
 the path. The proof app object keeps its vendored modules, so
 TestClient still exercises the proof code after the restore.
 """
+import asyncio
 import pathlib
 import sys
 
@@ -28,6 +29,7 @@ for _k in list(_saved_mesh):
 sys.path.insert(0, str(_SCOUT_SRC))
 import worker as proof  # noqa: E402  (path setup above)
 from mesh.direct_client import _TOOLS as _PROOF_TOOLS  # noqa: E402  (vendored copy)
+from mesh.async_tools import _TOOLS as _PROOF_ASYNC_TOOLS  # noqa: E402  (vendored copy)
 for _k in [k for k in sys.modules if k == "mesh" or k.startswith("mesh.")]:
     del sys.modules[_k]
 sys.modules.update(_saved_mesh)
@@ -38,7 +40,7 @@ sys.path.remove(str(_SCOUT_SRC))
 from mesh.direct_client import _TOOLS, direct_call  # noqa: E402  (repo module)
 
 
-def _fake_call(server, tool, args=None):
+async def _fake_call(server, tool, args=None):
     args = args or {}
     if (server, tool) == ("filings", "get_company_facts"):
         return {"ticker": "GOOGL", "company_name": "Alphabet Inc."}
@@ -74,14 +76,16 @@ def test_direct_client_dispatch_covers_scout_tools():
     ]:
         assert callable(_TOOLS[server][tool])
         assert callable(_PROOF_TOOLS[server][tool])
+        assert callable(_PROOF_ASYNC_TOOLS[server][tool])
     with pytest.raises(ValueError, match="Unknown MCP tool"):
         direct_call("filings", "no_such_tool", {})
 
 
 def test_vendored_copy_matches_repo():
-    repo = pathlib.Path(__file__).parents[2] / "mesh" / "direct_client.py"
-    copy = _SCOUT_SRC / "mesh" / "direct_client.py"
-    assert copy.read_text() == repo.read_text()
+    root = pathlib.Path(__file__).parents[2]
+    for name in ("direct_client.py", "worker_http.py", "async_tools.py", "scout_async.py",
+                 "agent_app.py", "scout.py"):
+        assert (_SCOUT_SRC / "mesh" / name).read_text() == (root / "mesh" / name).read_text()
 
 
 def test_proof_scout_health_and_card():
@@ -92,8 +96,8 @@ def test_proof_scout_health_and_card():
     assert card["skills"][0]["id"] == "collect_evidence"
 
 
-def test_proof_scout_uses_direct_call(monkeypatch):
-    monkeypatch.setattr(proof, "direct_call", _fake_call)
+def test_proof_scout_uses_async_direct_call(monkeypatch):
+    monkeypatch.setattr(proof, "async_direct_call", _fake_call)
     res = TestClient(proof.app).post("/tasks/send", json={"ticker": "GOOGL"}).json()
     assert res["state"] == "completed"
     pack = res["result"]
