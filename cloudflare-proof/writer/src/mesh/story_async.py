@@ -11,6 +11,20 @@ Anything else — no key, a failed call, a failed validation —
 falls back to the deterministic story, with the model note saying
 so, exactly like build_story.
 
+Source order in the cloud: Workers AI first (binding, no key),
+then the OpenRouter chain through AI Gateway via the Worker
+binding (mesh/gateway_binding.py — the gateway supplies the
+stored OpenRouter key, so no key travels from the Worker),
+then the OpenRouter chain direct with the Writer secret, then
+the deterministic story. The first gateway attempt (ADR 016)
+POSTed to the gateway HTTPS endpoint with no header and got
+HTTP 401: the agent-mesh gateway has "Authenticated Gateway"
+ON, so plain HTTP needs a gateway token the Worker does not
+have. The binding route replaces that HTTPS path entirely;
+the GATEWAY_OPENROUTER_URL Worker variable is now unused
+(left set in the dashboard, harmless) and no gateway URL is
+baked into the repo.
+
 Key handling, stated plainly: build_story_async takes an explicit
 api_key, falling back to OPENROUTER_API_KEY in the process
 environment (the Docker path, where the host .env supplies it).
@@ -32,6 +46,7 @@ import asyncio
 import os
 import time
 
+from .gateway_binding import GATEWAY_TIMEOUT_S, call_gateway_binding
 from .llm import (
     API_URL,
     MODELS,
@@ -46,17 +61,9 @@ from .worker_http import post_json
 MODEL_TIMEOUT_S = 60
 
 
-async def _call_openrouter_async(model: str, system: str, user: str, api_key: str,
-                                 gateway_url: str | None = None) -> dict:
-    """OpenRouter call, direct or via AI Gateway.
-
-    gateway_url is the full gateway endpoint (a Worker variable,
-    never baked into the repo). With a gateway, the stored
-    provider key (BYOK) supplies the OpenRouter key, so NO
-    Authorization header is sent — the key no longer travels
-    from the Worker at all. Without a gateway, the direct URL
-    and the key header are used exactly as before.
-    """
+async def _call_openrouter_async(model: str, system: str, user: str, api_key: str) -> dict:
+    """Direct OpenRouter call with the key header (the last LLM
+    resort: the binding routes above it need no key at all)."""
     started = time.monotonic()
     payload = {
         "model": model,
@@ -65,15 +72,11 @@ async def _call_openrouter_async(model: str, system: str, user: str, api_key: st
         "max_tokens": 1800,
     }
     headers = {
+        "Authorization": f"Bearer {api_key}",
         "HTTP-Referer": "https://example.com/agent-mesh-earnings",
         "X-Title": "Agent Mesh Earnings",
     }
-    url = API_URL
-    if gateway_url:
-        url = gateway_url
-    else:
-        headers["Authorization"] = f"Bearer {api_key}"
-    body = await post_json(url, payload, headers=headers)
+    body = await post_json(API_URL, payload, headers=headers)
     if isinstance(body, dict) and body.get("error"):
         err = body["error"]
         raise RuntimeError(f"OpenRouter error {err.get('code', '')}: {err.get('message', '')}")
@@ -85,21 +88,21 @@ async def _call_openrouter_async(model: str, system: str, user: str, api_key: st
 
 
 async def build_story_async(pack, analysis, llm_call=None, api_key: str | None = None,
-                            ai=None, ai_model: str = WORKERS_AI_MODEL,
-                            gateway_url: str | None = None) -> dict:
+                            ai=None, ai_model: str = WORKERS_AI_MODEL) -> dict:
     """Async twin of llm.build_story. llm_call(model, system, user)
     -> awaitable dict is injected by tests; in production it
     defaults to the direct OpenRouter POST above.
 
     Source order: Workers AI first when an `ai` binding is given
-    (no key, no third-party rate limit), then the OpenRouter
-    chain, then the deterministic story. A Workers AI failure —
-    exception or validation failure — is recorded and falls
-    through, never breaking the briefing. The OpenRouter chain
-    itself is routed via AI Gateway when gateway_url is given
-    (BYOK key, analytics, caching), and direct otherwise; the
-    story_model label says "(via AI Gateway)" when the gateway
-    wrote the story, so gateway use is visible in the briefing."""
+    (no key, no third-party rate limit), then the same model
+    chain through AI Gateway via the binding (no key — the
+    gateway supplies the stored OpenRouter key), then the
+    direct OpenRouter chain (needs the key), then the
+    deterministic story. A failure at any step — exception or
+    validation failure — is recorded and falls through, never
+    breaking the briefing. The story_model label says
+    "(via AI Gateway)" when a binding route wrote the story,
+    so gateway use is visible in the briefing."""
     key = api_key if api_key is not None else os.environ.get("OPENROUTER_API_KEY", "")
     system, user = _prompt(pack, analysis)
     errors: list[str] = []
@@ -120,13 +123,31 @@ async def build_story_async(pack, analysis, llm_call=None, api_key: str | None =
                         "tokens_in": result.get("tokens_in"),
                         "tokens_out": result.get("tokens_out"),
                         "latency_s": result.get("latency_s")}
+        for model in MODELS:
+            try:
+                result = await asyncio.wait_for(call_gateway_binding(ai, model, system, user),
+                                                timeout=GATEWAY_TIMEOUT_S)
+            except Exception as e:
+                errors.append(f"Gateway {model}: {e}")
+                continue
+            text = (result or {}).get("text", "") or ""
+            ok, reason = validate_story(text, pack, analysis)
+            if not ok:
+                errors.append(f"Gateway {model}: validation failed: {reason}")
+                continue
+            note = " (fallback model)" if model != PRIMARY else ""
+            note += " (via AI Gateway)"
+            return {"story": text.strip(),
+                    "model": f"{result.get('model', model)}{note}",
+                    "tokens_in": result.get("tokens_in"), "tokens_out": result.get("tokens_out"),
+                    "latency_s": result.get("latency_s")}
     if llm_call is None and not key:
         suffix = f" ({'; '.join(errors)}; no OPENROUTER_API_KEY configured)" if errors \
             else " (no OPENROUTER_API_KEY configured)"
         return {"story": deterministic_story(pack, analysis),
                 "model": f"deterministic{suffix}",
                 "tokens_in": None, "tokens_out": None, "latency_s": None}
-    caller = llm_call or (lambda model, s, u: _call_openrouter_async(model, s, u, key, gateway_url))
+    caller = llm_call or (lambda model, s, u: _call_openrouter_async(model, s, u, key))
     for model in MODELS:
         try:
             result = await asyncio.wait_for(caller(model, system, user), timeout=MODEL_TIMEOUT_S)
@@ -139,8 +160,6 @@ async def build_story_async(pack, analysis, llm_call=None, api_key: str | None =
             errors.append(f"{model}: validation failed: {reason}")
             continue
         note = " (fallback model)" if model != PRIMARY else ""
-        if gateway_url:
-            note += " (via AI Gateway)"
         return {"story": text.strip(),
                 "model": f"{result.get('model', model)}{note}",
                 "tokens_in": result.get("tokens_in"), "tokens_out": result.get("tokens_out"),
