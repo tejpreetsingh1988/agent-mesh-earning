@@ -7,6 +7,9 @@
   "observability": {
     "enabled": true
   },
+  "ai": {
+    "binding": "AI"
+  },
   "main": "src/worker.py",
   "name": "mesh-writer-proof"
 }
