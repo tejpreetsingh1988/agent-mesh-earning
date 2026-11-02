@@ -10,6 +10,17 @@ chunk that always contains the ticker.
 
 To grow the directory, add {"name", "ticker"} rows to
 web/companies/companies.json and re-run this script.
+
+The script also writes web/sitemap.xml (directory URLs only —
+the search box searches the company directory, not the briefing
+UI) and web/robots.txt pointing at it. The sitemap exists
+because the AI Search Discover crawl could not reach the
+directory from the site root even after the homepage linked to
+it (Nov 2, 2026: re-sync still indexed 0 documents), so the
+instance uses Sitemap parsing instead, with the sitemap as the
+exact URL list. Clean /companies/<TICKER> URLs are listed, not
+the .html files (Pages redirects .html to clean and serves the
+same content there).
 """
 import json
 import sys
@@ -83,7 +94,22 @@ def main() -> int:
     (ROOT / "web" / "companies" / "index.html").write_text(
         INDEX_HEAD + links + "\n" + INDEX_TAIL
     )
-    print(f"generated {len(seen)} company pages + index")
+    base = "https://agent-mesh-earnings.pages.dev"
+    urls = [f"{base}/companies/"] + [
+        f"{base}/companies/{c['ticker'].strip().upper()}"
+        for c in companies
+        if c["ticker"].strip().upper() in seen
+    ]
+    sitemap = ('<?xml version="1.0" encoding="UTF-8"?>\n'
+               '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+               + "".join(f"  <url><loc>{u}</loc></url>\n" for u in urls)
+               + "</urlset>\n")
+    (ROOT / "web" / "sitemap.xml").write_text(sitemap)
+    (ROOT / "web" / "robots.txt").write_text(
+        "User-agent: *\nAllow: /\n\n"
+        f"Sitemap: {base}/sitemap.xml\n"
+    )
+    print(f"generated {len(seen)} company pages + index + sitemap ({len(urls)} urls)")
     return 0
 
 
