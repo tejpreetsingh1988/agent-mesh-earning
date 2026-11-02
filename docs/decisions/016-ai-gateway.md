@@ -72,3 +72,51 @@ call.
    "(via AI Gateway)" and appears in gateway analytics.
 5. A repeat briefing for the same ticker shows a gateway
    cache hit while the story still validates.
+
+## Addendum — HTTPS path replaced by the Worker binding (Nov 2, 2026)
+
+The HTTPS path above was built, uploaded, and deployed — and
+then proven broken live. A no-auth POST to the gateway
+endpoint (both URL forms) returned HTTP 401 AiGatewayError
+2009. The dashboard check found why: the agent-mesh gateway
+has "Authenticated Gateway" ON, so plain HTTP needs a gateway
+token the Worker does not have. The stored OpenRouter key was
+never the problem — it covers the provider credential, not
+gateway access — and the key entry itself showed Configured
+with no warning.
+
+The fix is the Worker binding, chosen by Tej over a gateway
+token secret and over turning gateway auth off. The Writer
+already holds the `env.AI` binding (from the Workers AI
+batch); no new binding is declared. The OpenRouter chain now
+runs through dynamic routes on the gateway — story-nemotron,
+story-gemma, story-cohere, one per model in the chain, so
+fallback order is preserved — called as
+`ai.run("dynamic/<route>", payload, {"gateway": {"id":
+"agent-mesh"}})` from new `mesh/gateway_binding.py`. A binding
+call is authenticated automatically, and the gateway then
+resolves the provider credential in its documented order:
+request key, stored `default`-alias key, Unified Billing. The
+stored OpenRouter key fires, so no Cloudflare credits are
+involved. Dynamic routes also sidestep the naming problem:
+`env.AI.run` addresses third-party models as
+`{author}/{model}`, and OpenRouter hosts every author's
+models, so no such spelling is unambiguous for an OpenRouter
+model; the route name is ours and the provider+model mapping
+lives in the dashboard.
+
+Consequences: `build_story_async` no longer takes
+`gateway_url`, and the HTTPS gateway code is removed (the
+GATEWAY_OPENROUTER_URL Worker variable is left set, unused
+and harmless). The direct OpenRouter chain with the Writer
+secret stays as the last LLM resort. The story label
+"(via AI Gateway)" now means a binding route wrote the
+story. Cache Responses was OFF at diagnosis; enabling it is
+part of this batch's dashboard steps, since the original
+caching claim depends on it. Tests: the old HTTPS tests are
+replaced by `tests/unit/test_gateway_binding.py` (route
+mapping, gateway id in run options, fall-through to direct
+and to deterministic). Live proof still needs a natural
+fallback — Workers AI must fail first — so the label and the
+gateway analytics entry are verified by briefing runs, not
+claimed from the deploy.
