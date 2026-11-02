@@ -148,6 +148,246 @@ function claimBlocksHtml(claims) {
   }).join("");
 }
 
+// ---- Analyst table (replaces claim cards) ----
+// Claims arrive as {text, value, derivation}. The table parses
+// metric / period / detail OUT of the claim text for display only
+// — it never recomputes a percentage. The value pill is the
+// Analyst's own c.value, rounded exactly as the old cards did.
+// Click a row to expand its derivation; filter + sort only
+// reorder/filter the Analyst's claims, they never change one.
+const analystTableData = {};
+const analystTableState = {};
+const analystExpanded = {};
+
+function parseClaim(c) {
+  const text = String(c.text || "");
+  const kindFull = claimKind(text);
+  const kind = kindFull.replace(/^claim-/, "");
+  const pct = /%|percent|growth|margin|beat|miss|reaction/i.test(text) ? "%" : "";
+  const value = Number.isFinite(c.value) ? round1(c.value) + pct : "—";
+  const valueNum = Number.isFinite(c.value) ? c.value : null;
+  // Result number: the first % figure in the text, e.g. +14.0%.
+  const resMatch = text.match(/([+-]?\d+(?:\.\d+)?%)/);
+  const after = resMatch ? text.slice(text.indexOf(resMatch[0]) + resMatch[0].length) : "";
+  const detailMatch = after.match(/^\s*\((.*)\)\s*$/s);
+  const detail = detailMatch ? detailMatch[1] : "";
+  let head = resMatch ? text.slice(0, text.indexOf(resMatch[0])).replace(/:\s*$/, "").trim() : text;
+  let metric = head, period = "—";
+  const paren = head.match(/^(.*?)\s*\((.*)\)\s*$/s);
+  if (paren) {
+    metric = paren[1].trim();
+    const inside = paren[2].trim();
+    // Only a date / date-range counts as a period. A long source
+    // note (e.g. the EPS-vs-consensus basis note) is not a period.
+    period = /\d{4}-\d{2}-\d{2}/.test(inside) ? inside : "—";
+  }
+  const arrow = valueNum === null ? "" : valueNum < 0 ? " ▼" : valueNum > 0 ? " ▲" : "";
+  return { metric, period, detail, kind, kindFull, value, valueNum, arrow,
+    derivation: String(c.derivation || "").replace(/, from facts.*$/, "") };
+}
+
+function analystTableHtml(key, claims) {
+  const st = analystTableState[key] || (analystTableState[key] = { filter: "all", sort: "original" });
+  const expanded = analystExpanded[key] || (analystExpanded[key] = new Set());
+  const parsed = (claims || []).map((c, i) => ({ ...parseClaim(c), _i: i }));
+  const filtered = parsed.filter((p) => st.filter === "all" || p.kind === st.filter);
+  const sorted = [...filtered];
+  if (st.sort === "abs") sorted.sort((a, b) => Math.abs(b.valueNum || 0) - Math.abs(a.valueNum || 0));
+  else if (st.sort === "metric") sorted.sort((a, b) => a.metric.localeCompare(b.metric));
+  else sorted.sort((a, b) => a._i - b._i);
+  const filters = [["all", "All"], ["growth", "Growth"], ["margin", "Margin"], ["eps", "EPS / consensus"], ["price", "Price"], ["other", "Other"]];
+  const kindColor = { growth: "#1d4ed8", margin: "#6d28d9", eps: "#b45309", price: "#0f766e", other: "#71717a" };
+  if (!parsed.length) return `<p class="agent-waiting">No claims returned.</p>`;
+  const rows = sorted.map((p) => {
+    const isOpen = expanded.has(p._i);
+    const main = `<tr data-idx="${p._i}" title="Click to ${isOpen ? "hide" : "show"} its formula">`
+      + `<td class="metric-cell"><span class="kind-dot" style="background:${kindColor[p.kind] || "#71717a"}"></span>${esc(p.metric)}</td>`
+      + `<td class="period-cell">${esc(p.period)}</td>`
+      + `<td class="result-cell"><span class="result-pill kind-${p.kind}${(p.valueNum || 0) < 0 ? " negative" : ""}">${esc(p.value)}${p.arrow}</span></td>`
+      + `<td class="detail-cell">${esc(p.detail)}</td></tr>`;
+    const formula = `<tr class="formula-row" data-formula-for="${p._i}"${isOpen ? "" : " hidden"}>`
+      + `<td colspan="4"><code>${esc(p.derivation || "No derivation supplied by the Analyst.")}</code></td></tr>`;
+    return main + formula;
+  }).join("");
+  return `<div class="analyst-controls" data-controls="${key}">`
+    + filters.map(([f, label]) => `<button type="button" class="analyst-filter${st.filter === f ? " is-on" : ""}" data-filter="${f}">${label}</button>`).join("")
+    + `<select class="analyst-sort" aria-label="Sort claims">`
+    + `<option value="original"${st.sort === "original" ? " selected" : ""}>Original order</option>`
+    + `<option value="abs"${st.sort === "abs" ? " selected" : ""}>Biggest % first</option>`
+    + `<option value="metric"${st.sort === "metric" ? " selected" : ""}>Metric A–Z</option></select></div>`
+    + `<div class="analyst-table-wrap"><table class="analyst-table"><thead><tr>`
+    + `<th>Metric</th><th>Period</th><th class="num">Result</th><th>Detail</th></tr></thead>`
+    + `<tbody>${rows}</tbody></table></div>`
+    + `<p class="analyst-note">Click a row to show its exact formula. Filters and sorting only reorder the Analyst&rsquo;s claims.</p>`;
+}
+
+function renderAnalyst(key, claims, el, noteHtml) {
+  analystTableData[key] = claims || [];
+  if (!el) return;
+  el.innerHTML = (noteHtml || "") + analystTableHtml(key, analystTableData[key]);
+  const controls = el.querySelector(`[data-controls="${key}"]`);
+  if (controls) {
+    controls.querySelectorAll("[data-filter]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        analystTableState[key].filter = btn.dataset.filter;
+        renderAnalyst(key, analystTableData[key], el, noteHtml);
+      });
+    });
+    const sel = controls.querySelector(".analyst-sort");
+    if (sel) sel.addEventListener("change", () => {
+      analystTableState[key].sort = sel.value;
+      renderAnalyst(key, analystTableData[key], el, noteHtml);
+    });
+  }
+  el.querySelectorAll("tbody tr[data-idx]").forEach((row) => {
+    row.addEventListener("click", () => {
+      const idx = Number(row.dataset.idx);
+      const set = analystExpanded[key] || (analystExpanded[key] = new Set());
+      if (set.has(idx)) set.delete(idx); else set.add(idx);
+      const fr = el.querySelector(`[data-formula-for="${idx}"]`);
+      if (fr) fr.hidden = !set.has(idx);
+      row.title = `Click to ${set.has(idx) ? "hide" : "show"} its formula`;
+    });
+  });
+}
+
+// ---- Charts + glance + handover loop (right/left rails) ----
+// All chart data comes from streamed Scout facts / Analyst claims
+// stored below. Nothing is invented here: a chart with no source
+// data stays empty with its placeholder text.
+let lastScoutFacts = [];
+let lastAnalystClaims = [];
+const chartInstances = {};
+
+function destroyChart(id) {
+  if (chartInstances[id]) { try { chartInstances[id].destroy(); } catch (e) {} delete chartInstances[id]; }
+}
+function setChartEmpty(id, showEmpty) {
+  const el = $(`chart-${id}-empty`);
+  if (el) el.hidden = !showEmpty;
+}
+function makeChart(id, type, labels, datasets, opts) {
+  if (typeof Chart === "undefined") return null;
+  const canvas = $(`chart-${id}`);
+  if (!canvas) return null;
+  destroyChart(id);
+  const chart = new Chart(canvas, { type, data: { labels, datasets },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { font: { size: 11 } } },
+        tooltip: { titleFont: { size: 12 }, bodyFont: { size: 12 } } },
+      scales: type === "doughnut" ? {} : { y: { ticks: { font: { size: 11 } } }, x: { ticks: { font: { size: 11 } } } },
+      ...(opts || {}) } });
+  chartInstances[id] = chart;
+  return chart;
+}
+function updateTrendChart() {
+  const tables = pivotFacts(lastScoutFacts);
+  const rev = tables.find((t) => t.metric === "total_revenue");
+  if (!rev || !rev.periods.length) { destroyChart("trend"); setChartEmpty("trend", true); return; }
+  const labels = rev.periods.map(quarterLabel);
+  const data = rev.cells.map((c) => Number.isFinite(c.value) ? c.value : null);
+  setChartEmpty("trend", false);
+  makeChart("trend", "bar", labels, [{ label: `Revenue (${rev.unit || ""})`.trim(), data,
+    backgroundColor: labels.map((_, i) => i === labels.length - 1 ? "#1d4ed8" : "#93c5fd"),
+    borderRadius: 6 }]);
+}
+function updateGrowthChart() {
+  const rows = (lastAnalystClaims || []).map(parseClaim)
+    .filter((p) => /yoy/i.test(p.metric) && p.kind !== "other" && p.valueNum !== null);
+  if (!rows.length) { destroyChart("growth"); setChartEmpty("growth", true); return; }
+  setChartEmpty("growth", false);
+  const colors = { growth: "#1d4ed8", margin: "#6d28d9", eps: "#b45309", price: "#0f766e", other: "#71717a" };
+  makeChart("growth", "bar", rows.map((r) => r.metric.replace(/\s*YoY\s*/i, "")),
+    [{ label: "YoY %", data: rows.map((r) => r.valueNum),
+      backgroundColor: rows.map((r) => colors[r.kind] || "#71717a"), borderRadius: 6 }]);
+}
+function updateEpsAndMarginCharts() {
+  const parsed = (lastAnalystClaims || []).map(parseClaim);
+  const epsClaim = parsed.find((p) => /consensus/i.test(p.metric));
+  if (epsClaim) {
+    const m = epsClaim.detail.match(/([\d.]+)\s*vs\s*([\d.]+)/);
+    if (m) {
+      setChartEmpty("eps", false);
+      makeChart("eps", "bar", ["Reported", "Forecast"],
+        [{ label: "EPS ($)", data: [Number(m[1]), Number(m[2])],
+          backgroundColor: ["#b45309", "#fde68a"], borderRadius: 6 }]);
+    }
+  } else { destroyChart("eps"); setChartEmpty("eps", true); }
+  const margin = parsed.find((p) => p.kind === "margin");
+  if (margin && margin.valueNum !== null) {
+    setChartEmpty("margin", false);
+    makeChart("margin", "doughnut", ["Operating margin", "Rest"],
+      [{ data: [margin.valueNum, Math.max(0, 100 - margin.valueNum)],
+        backgroundColor: ["#6d28d9", "#e4e4e7"], borderWidth: 0 }]);
+  } else { destroyChart("margin"); setChartEmpty("margin", true); }
+}
+function updateGlance(quarterLabelText) {
+  const tables = pivotFacts(lastScoutFacts);
+  const rev = tables.find((t) => t.metric === "total_revenue");
+  const latest = rev && rev.periods.length ? rev.periods[rev.periods.length - 1] : null;
+  const latestCell = latest ? rev.cells[rev.periods.indexOf(latest)] : null;
+  if ($("glance-quarter")) $("glance-quarter").textContent = quarterLabelText || (latest ? quarterLabel(latest) : "—");
+  if ($("glance-revenue")) $("glance-revenue").textContent = latestCell && Number.isFinite(latestCell.value)
+    ? `${round1(latestCell.value)} ${latestCell.unit || ""}`.trim() : "—";
+  const parsed = (lastAnalystClaims || []).map(parseClaim);
+  const margin = parsed.find((p) => p.kind === "margin");
+  if ($("glance-margin")) $("glance-margin").textContent = margin ? margin.value : "—";
+  const epsClaim = parsed.find((p) => /consensus/i.test(p.metric));
+  if ($("glance-eps")) $("glance-eps").textContent = epsClaim ? `${epsClaim.value} (${epsClaim.detail})` : "—";
+}
+function updateAllCharts(quarterLabelText) {
+  updateTrendChart(); updateGrowthChart(); updateEpsAndMarginCharts(); updateGlance(quarterLabelText);
+}
+function clearCharts() {
+  ["trend", "growth", "eps", "margin"].forEach((id) => { destroyChart(id); setChartEmpty(id, true); });
+  lastScoutFacts = []; lastAnalystClaims = [];
+  ["glance-quarter", "glance-revenue", "glance-margin", "glance-eps"].forEach((id) => { const el = $(id); if (el) el.textContent = "—"; });
+}
+
+const LOOP_ORDER = ["scout", "analyst", "critic", "writer", "conductor"];
+const LOOP_LABEL = { scout: "Scout", analyst: "Analyst", critic: "Critic", writer: "Writer", conductor: "Conductor" };
+function setLoop(agent, statusText) {
+  LOOP_ORDER.forEach((a) => {
+    const node = $(`loop-node-${a}`);
+    if (!node) return;
+    node.classList.toggle("is-active", a === agent);
+    node.classList.toggle("is-done", agent ? LOOP_ORDER.indexOf(a) < LOOP_ORDER.indexOf(agent) : false);
+  });
+  const center = $("loop-center"), sub = $("loop-center-sub"), status = $("loop-status");
+  if (center) center.textContent = agent ? LOOP_LABEL[agent] : "Idle";
+  if (sub) sub.textContent = agent ? "has the baton" : "Pick a company";
+  if (status) status.textContent = statusText || (agent ? `${LOOP_LABEL[agent]} is working.` : "No run yet. The loop idles until a briefing starts.");
+}
+function addHandover(text) {
+  const feed = $("handover-feed");
+  if (!feed) return;
+  const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const li = document.createElement("li");
+  const t = document.createElement("time");
+  t.textContent = time;
+  li.append(t, document.createTextNode(` ${text}`));
+  feed.prepend(li);
+  while (feed.children.length > 8) feed.removeChild(feed.lastChild);
+}
+function initBackground() {
+  // tsParticles slim bundle (MIT). If the CDN is blocked, the CSS
+  // mesh blobs behind it still give the page its colour — the
+  // briefing never depends on the background library.
+  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  try {
+    const tp = window.tsParticles;
+    if (!tp || typeof tp.load !== "function") return;
+    tp.load({ id: "bg-particles", options: {
+      fpsLimit: 60, background: { color: { value: "transparent" } },
+      particles: { number: { value: 55, density: { enable: true, area: 900 } },
+        color: { value: ["#0f766e", "#1d4ed8", "#6d28d9", "#db2777", "#b45309"] },
+        links: { enable: true, color: "#cbd5e1", distance: 140, opacity: 0.5 },
+        move: { enable: true, speed: 0.6, direction: "none", outModes: "out" },
+        opacity: { value: 0.55 }, size: { value: { min: 2, max: 4 } } },
+      detectRetina: true } });
+  } catch (e) { /* background is decorative; never break the page */ }
+}
+
 function storyHtml(text) {
   // LLM stories use markdown bold for lead-ins. The page renders
   // plain text, so convert matched **bold** to <strong> (after
@@ -202,6 +442,10 @@ function resetCards() {
   });
   analystRuns = 0;
   workingAgent = null;
+  const feed = $("handover-feed");
+  if (feed) feed.innerHTML = "";
+  setLoop(null, "Starting the pipeline.");
+  clearCharts();
 }
 
 function setConductor(text, detail) {
@@ -238,10 +482,14 @@ function onStreamEvent(ev, ticker) {
     setConductor("Conductor — Pipeline Lead", `Scout is fetching filings for ${ticker}.`);
     setStatus("scout", "working", "");
     workingAgent = "scout";
+    setLoop("scout", "Scout is fetching filings.");
+    addHandover("Conductor → Scout: fetch filings");
     return;
   }
   if (name === "scout_done") {
     const facts = ev.fact_list || [];
+    lastScoutFacts = facts;
+    updateTrendChart();
     const publishers = [...new Set(facts.map((f) => (f.source && f.source.publisher) || "").filter(Boolean))];
     setBody("scout",
       `<p class="agent-filing">${esc(ev.company_name || ticker)} — ${esc(ev.quarter_label || "")} — `
@@ -252,18 +500,25 @@ function onStreamEvent(ev, ticker) {
     setConductor("Conductor — Pipeline Lead", "Scout done. Analyst is computing.");
     setStatus("analyst", "working", "");
     workingAgent = "analyst";
+    setLoop("analyst", `Scout handed over ${facts.length} facts.`);
+    addHandover(`Scout → Analyst: ${facts.length} facts`);
     return;
   }
   if (name === "analyst_done") {
     analystRuns += 1;
     const claims = ev.claim_list || [];
+    lastAnalystClaims = claims;
     const note = analystRuns > 1
       ? `<p class="agent-note">Revised after Critic feedback.</p>` : "";
-    setBody("analyst", note + claimBlocksHtml(claims));
+    const analystEl = card("analyst") && card("analyst").querySelector("[data-body]");
+    renderAnalyst("analyst", claims, analystEl, note);
+    updateAllCharts();
     setStatus("analyst", "done", ev.duration_ms ? `took ${secs(ev.duration_ms)}` : "");
     setConductor("Conductor — Pipeline Lead", "Analyst done. Critic is re-checking.");
     setStatus("critic", "working", "");
     workingAgent = "critic";
+    setLoop("critic", `Analyst handed over ${claims.length} claims.`);
+    addHandover(`Analyst → Critic: ${claims.length} claims`);
     return;
   }
   if (name === "critic_attempt") {
@@ -277,6 +532,8 @@ function onStreamEvent(ev, ticker) {
       setConductor("Conductor — Pipeline Lead", "Critic passed. Writer is writing.");
       setStatus("writer", "working", "");
       workingAgent = "writer";
+      setLoop("writer", "Critic passed — Writer has the baton.");
+      addHandover("Critic → Writer: PASS");
     } else {
       setBody("critic",
         `<p class="agent-fail">Attempt ${ev.attempt} — FAIL. Analyst is revising.</p>`
@@ -284,6 +541,8 @@ function onStreamEvent(ev, ticker) {
       setStatus("critic", "revising", "");
       setStatus("analyst", "working", "");
       workingAgent = "analyst";
+      setLoop("analyst", "Critic failed the claims — Analyst is revising.");
+      addHandover("Critic → Analyst: FAIL, revising");
     }
     return;
   }
@@ -294,6 +553,8 @@ function onStreamEvent(ev, ticker) {
     setStatus("writer", "done", ev.duration_ms ? `took ${secs(ev.duration_ms)}` : "");
     setConductor("Conductor — Pipeline Lead", "Writer done. Assembling the briefing.");
     workingAgent = null;
+    setLoop("conductor", "Writer handed the story back to the Conductor.");
+    addHandover("Writer → Conductor: story ready");
   }
 }
 
@@ -349,6 +610,8 @@ async function runStream(ticker) {
             const total = ((Date.now() - runStartedAt) / 1000).toFixed(1);
             stopElapsed(`Done in ${total}s`);
             setConductor("Conductor — Pipeline Lead", `Briefing complete in ${total}s.`);
+            setLoop("conductor", `Briefing complete in ${total}s.`);
+            addHandover("Conductor: briefing complete");
             return true;
           }
           if (ev.event === "error") {
@@ -465,10 +728,13 @@ function render(b) {
   // the internal fact IDs are not something a reader can use.
   // Same claim blocks as the Analyst card, so the record matches
   // what the card showed.
-  $("b-table").innerHTML = claimBlocksHtml((b.table || []).map((row) => ({
+  const briefingClaims = (b.table || []).map((row) => ({
     text: row.claim, value: row.value,
     derivation: String(row.derivation || "").replace(/, from facts.*$/, ""),
-  })));
+  }));
+  lastAnalystClaims = briefingClaims;
+  renderAnalyst("briefing", briefingClaims, $("b-table"), "");
+  updateAllCharts(b.quarter_label);
   const drivers = b.drivers || [];
   show($("sec-drivers"), drivers.length > 0);
   $("b-drivers").innerHTML = drivers.map((d) => `<li>${esc(d)}</li>`).join("");
@@ -614,3 +880,20 @@ $("company-go").addEventListener("click", searchCompanies);
 $("company-search").addEventListener("keydown", (e) => {
   if (e.key === "Enter") searchCompanies();
 });
+
+// Loop legend + nodes: jump to that agent's card. Background last,
+// so a CDN failure can never block search or the briefing.
+document.querySelectorAll(".loop-leg").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const target = $(`card-${btn.dataset.jump}`);
+    if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+});
+document.querySelectorAll(".loop-node").forEach((node) => {
+  node.addEventListener("click", () => {
+    const agent = node.dataset.agent;
+    const target = agent === "conductor" ? $("agents") : $(`card-${agent}`);
+    if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+});
+initBackground();

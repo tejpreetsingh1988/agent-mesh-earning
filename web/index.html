@@ -6,16 +6,27 @@
 <title>Agent Mesh — Earnings Briefings</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<main class="container">
+<div class="bg-blobs" aria-hidden="true"><span class="blob blob-teal"></span><span class="blob blob-blue"></span><span class="blob blob-violet"></span><span class="blob blob-amber"></span></div>
+<div id="bg-particles" aria-hidden="true"></div>
+
+<div class="shell">
   <header class="page-head">
-    <h1>Agent Mesh</h1>
+    <p class="eyebrow">● LIVE AGENT LOOP &nbsp;·&nbsp; SCOUT → ANALYST → CRITIC → WRITER</p>
+    <h1>Agent <span class="grad-text">Mesh</span></h1>
     <p class="page-sub">Earnings briefings, verified before they&rsquo;re written. Four agents do the
-    work in order, each accountable for its own step — watch their cards fill in
-    below as each one finishes.</p>
+    work in order, each accountable for its own step — watch the loop on the left
+    hand the baton over in real time, and the charts on the right fill from the
+    very same numbers.</p>
+    <div class="hero-chips">
+      <span class="hero-chip chip-teal">Scout · Evidence</span>
+      <span class="hero-chip chip-blue">Analyst · Numbers</span>
+      <span class="hero-chip chip-amber">Critic · Truth Gate</span>
+      <span class="hero-chip chip-violet">Writer · Story</span>
+    </div>
   </header>
 
   <section class="card search-card">
@@ -31,130 +42,218 @@
     Only one search per click, so the free query pool is never burned by typing.</p>
   </section>
 
-  <section id="agents" hidden>
-    <div class="conductor card">
-      <span class="conductor-dot" id="conductor-dot"></span>
-      <div class="conductor-text">
-        <strong id="conductor-status">Conductor — Pipeline Lead</strong>
-        <span id="conductor-detail">Runs the agents in order and enforces the Critic gate.</span>
-      </div>
-      <span class="conductor-time" id="conductor-time"></span>
-    </div>
-
-    <article class="agent-card" id="card-scout" data-agent="scout">
-      <header class="agent-head">
-        <span class="agent-dot"></span>
-        <div class="agent-title">
-          <strong>Scout — Evidence Hunter</strong>
-          <span>Finds the filing, the numbers, and the call transcript.</span>
+  <div class="layout">
+    <!-- LEFT RAIL: the live handover loop -->
+    <aside class="rail rail-left" aria-label="Agent handover loop">
+      <section class="card loop-card">
+        <h3>🔁 Agent handover loop</h3>
+        <p class="rail-hint">Live. A packet circles the loop; the active agent glows
+        as the stream hands it the baton. Idle, it keeps circling slowly.</p>
+        <svg class="loop-svg" viewBox="0 0 260 260" role="img" aria-label="Scout to Analyst to Critic to Writer to Conductor and back to Scout">
+          <path id="loop-path" d="M130,30 L232,100 L193,224 L67,224 L28,100 Z" fill="none" stroke="#e4e4e7" stroke-width="3" stroke-linejoin="round"/>
+          <path d="M130,30 L232,100 L193,224 L67,224 L28,100 Z" fill="none" stroke="url(#loopGrad)" stroke-width="3" stroke-linejoin="round" stroke-dasharray="10 8" class="loop-dash"/>
+          <defs>
+            <linearGradient id="loopGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#0f766e"/><stop offset="35%" stop-color="#1d4ed8"/>
+              <stop offset="65%" stop-color="#b45309"/><stop offset="100%" stop-color="#6d28d9"/>
+            </linearGradient>
+          </defs>
+          <circle r="7" fill="#0f766e" stroke="#fff" stroke-width="2" class="loop-packet"><animateMotion dur="9s" repeatCount="indefinite" path="M130,30 L232,100 L193,224 L67,224 L28,100 Z"/></circle>
+          <circle r="5" fill="#6d28d9" stroke="#fff" stroke-width="2" class="loop-packet" opacity="0.85"><animateMotion dur="9s" begin="-4.5s" repeatCount="indefinite" path="M130,30 L232,100 L193,224 L67,224 L28,100 Z"/></circle>
+          <g class="loop-node" id="loop-node-scout" data-agent="scout"><circle cx="130" cy="30" r="22" fill="#0f766e"/><text x="130" y="35" text-anchor="middle">S</text></g>
+          <g class="loop-node" id="loop-node-analyst" data-agent="analyst"><circle cx="232" cy="100" r="22" fill="#1d4ed8"/><text x="232" y="105" text-anchor="middle">A</text></g>
+          <g class="loop-node" id="loop-node-critic" data-agent="critic"><circle cx="193" cy="224" r="22" fill="#b45309"/><text x="193" y="229" text-anchor="middle">C</text></g>
+          <g class="loop-node" id="loop-node-writer" data-agent="writer"><circle cx="67" cy="224" r="22" fill="#6d28d9"/><text x="67" y="229" text-anchor="middle">W</text></g>
+          <g class="loop-node" id="loop-node-conductor" data-agent="conductor"><circle cx="28" cy="100" r="22" fill="#18181b"/><text x="28" y="105" text-anchor="middle">◆</text></g>
+          <text x="130" y="130" text-anchor="middle" class="loop-center" id="loop-center">Idle</text>
+          <text x="130" y="148" text-anchor="middle" class="loop-center-sub" id="loop-center-sub">Pick a company</text>
+        </svg>
+        <div class="loop-legend">
+          <button type="button" class="loop-leg" data-jump="scout"><span class="dot dot-teal"></span>Scout</button>
+          <button type="button" class="loop-leg" data-jump="analyst"><span class="dot dot-blue"></span>Analyst</button>
+          <button type="button" class="loop-leg" data-jump="critic"><span class="dot dot-amber"></span>Critic</button>
+          <button type="button" class="loop-leg" data-jump="writer"><span class="dot dot-violet"></span>Writer</button>
         </div>
-        <span class="agent-status" data-status>Waiting</span>
-        <span class="agent-time" data-time></span>
-      </header>
-      <p class="agent-accountable">Accountable for: every fact names its source. Nothing is invented.</p>
-      <div class="agent-body" data-body><p class="agent-waiting">Waiting for the pipeline to reach Scout.</p></div>
-    </article>
+        <p class="loop-status" id="loop-status">No run yet. The loop idles until a briefing starts.</p>
+        <ul class="handover-feed" id="handover-feed"></ul>
+      </section>
 
-    <article class="agent-card" id="card-analyst" data-agent="analyst">
-      <header class="agent-head">
-        <span class="agent-dot"></span>
-        <div class="agent-title">
-          <strong>Analyst — Numbers Desk</strong>
-          <span>Computes growth, margins, beats and misses.</span>
+      <section class="card rail-card">
+        <h3>How to read this page</h3>
+        <ul class="list">
+          <li><strong>Left:</strong> who has the baton right now.</li>
+          <li><strong>Centre:</strong> the agents&rsquo; own cards, then the full briefing.</li>
+          <li><strong>Right:</strong> charts drawn from the same Scout facts and Analyst claims — no new numbers.</li>
+        </ul>
+        <p class="meta">Click any Analyst row to expand its exact formula. Filter and sort the table without losing the derivation.</p>
+      </section>
+    </aside>
+
+    <!-- CENTRE: agents + briefing (IDs unchanged for app.js) -->
+    <main class="main-col">
+      <section id="agents" hidden>
+        <div class="conductor card">
+          <span class="conductor-dot" id="conductor-dot"></span>
+          <div class="conductor-text">
+            <strong id="conductor-status">Conductor — Pipeline Lead</strong>
+            <span id="conductor-detail">Runs the agents in order and enforces the Critic gate.</span>
+          </div>
+          <span class="conductor-time" id="conductor-time"></span>
         </div>
-        <span class="agent-status" data-status>Waiting</span>
-        <span class="agent-time" data-time></span>
-      </header>
-      <p class="agent-accountable">Accountable for: every claim shows its arithmetic and period.</p>
-      <div class="agent-body" data-body><p class="agent-waiting">Waiting for Scout&rsquo;s facts.</p></div>
-    </article>
 
-    <article class="agent-card" id="card-critic" data-agent="critic">
-      <header class="agent-head">
-        <span class="agent-dot"></span>
-        <div class="agent-title">
-          <strong>Critic — Truth Gate</strong>
-          <span>Independently re-verifies every number.</span>
+        <article class="agent-card" id="card-scout" data-agent="scout">
+          <header class="agent-head">
+            <span class="agent-dot"></span>
+            <div class="agent-title">
+              <strong>Scout — Evidence Hunter</strong>
+              <span>Finds the filing, the numbers, and the call transcript.</span>
+            </div>
+            <span class="agent-status" data-status>Waiting</span>
+            <span class="agent-time" data-time></span>
+          </header>
+          <p class="agent-accountable">Accountable for: every fact names its source. Nothing is invented.</p>
+          <div class="agent-body" data-body><p class="agent-waiting">Waiting for the pipeline to reach Scout.</p></div>
+        </article>
+
+        <article class="agent-card" id="card-analyst" data-agent="analyst">
+          <header class="agent-head">
+            <span class="agent-dot"></span>
+            <div class="agent-title">
+              <strong>Analyst — Numbers Desk</strong>
+              <span>Computes growth, margins, beats and misses.</span>
+            </div>
+            <span class="agent-status" data-status>Waiting</span>
+            <span class="agent-time" data-time></span>
+          </header>
+          <p class="agent-accountable">Accountable for: every claim shows its arithmetic and period.</p>
+          <div class="agent-body" data-body><p class="agent-waiting">Waiting for Scout&rsquo;s facts.</p></div>
+        </article>
+
+        <article class="agent-card" id="card-critic" data-agent="critic">
+          <header class="agent-head">
+            <span class="agent-dot"></span>
+            <div class="agent-title">
+              <strong>Critic — Truth Gate</strong>
+              <span>Independently re-verifies every number.</span>
+            </div>
+            <span class="agent-status" data-status>Waiting</span>
+            <span class="agent-time" data-time></span>
+          </header>
+          <p class="agent-accountable">Accountable for: nothing ships without its pass. A fail stops the briefing.</p>
+          <div class="agent-body" data-body><p class="agent-waiting">Waiting for Analyst&rsquo;s claims.</p></div>
+        </article>
+
+        <article class="agent-card" id="card-writer" data-agent="writer">
+          <header class="agent-head">
+            <span class="agent-dot"></span>
+            <div class="agent-title">
+              <strong>Writer — Storyteller</strong>
+              <span>Turns verified claims into the narrative.</span>
+            </div>
+            <span class="agent-status" data-status>Waiting</span>
+            <span class="agent-time" data-time></span>
+          </header>
+          <p class="agent-accountable">Accountable for: every figure traces to a claim or the transcript.</p>
+          <div class="agent-body" data-body><p class="agent-waiting">Waiting for Critic&rsquo;s pass.</p></div>
+        </article>
+      </section>
+
+      <section id="log" class="card" hidden>
+        <h3>Live log</h3>
+        <ul id="log-list" class="log-list"></ul>
+        <p class="meta" id="log-now"></p>
+        <button id="log-download" type="button" class="btn-secondary">Download log</button>
+      </section>
+
+      <section id="error" class="alert-error" hidden>
+        <p class="alert-title">Could not build a briefing</p>
+        <p id="error-msg" class="alert-msg"></p>
+      </section>
+
+      <article id="briefing" hidden>
+        <div class="badges">
+          <span class="badge badge-primary" id="b-ticker"></span>
+          <span class="badge badge-outline" id="b-quarter"></span>
+          <span class="badge badge-secondary">Critic approved</span>
         </div>
-        <span class="agent-status" data-status>Waiting</span>
-        <span class="agent-time" data-time></span>
-      </header>
-      <p class="agent-accountable">Accountable for: nothing ships without its pass. A fail stops the briefing.</p>
-      <div class="agent-body" data-body><p class="agent-waiting">Waiting for Analyst&rsquo;s claims.</p></div>
-    </article>
+        <h2 id="b-verdict" class="verdict"></h2>
 
-    <article class="agent-card" id="card-writer" data-agent="writer">
-      <header class="agent-head">
-        <span class="agent-dot"></span>
-        <div class="agent-title">
-          <strong>Writer — Storyteller</strong>
-          <span>Turns verified claims into the narrative.</span>
-        </div>
-        <span class="agent-status" data-status>Waiting</span>
-        <span class="agent-time" data-time></span>
-      </header>
-      <p class="agent-accountable">Accountable for: every figure traces to a claim or the transcript.</p>
-      <div class="agent-body" data-body><p class="agent-waiting">Waiting for Critic&rsquo;s pass.</p></div>
-    </article>
-  </section>
+        <section class="card">
+          <h3>Verified claims</h3>
+          <div id="b-table"></div>
+        </section>
 
-  <section id="log" class="card" hidden>
-    <h3>Live log</h3>
-    <ul id="log-list" class="log-list"></ul>
-    <p class="meta" id="log-now"></p>
-    <button id="log-download" type="button" class="btn-secondary">Download log</button>
-  </section>
+        <section class="card" id="sec-drivers" hidden>
+          <h3>What drove the quarter</h3>
+          <ul id="b-drivers" class="list"></ul>
+        </section>
 
-  <section id="error" class="alert-error" hidden>
-    <p class="alert-title">Could not build a briefing</p>
-    <p id="error-msg" class="alert-msg"></p>
-  </section>
+        <section class="card" id="sec-market" hidden>
+          <h3>Market reaction</h3>
+          <p id="b-reaction" class="body-text"></p>
+        </section>
 
-  <article id="briefing" hidden>
-    <div class="badges">
-      <span class="badge badge-primary" id="b-ticker"></span>
-      <span class="badge badge-outline" id="b-quarter"></span>
-      <span class="badge badge-secondary">Critic approved</span>
-    </div>
-    <h2 id="b-verdict" class="verdict"></h2>
+        <section class="card" id="sec-watch" hidden>
+          <h3>Guidance and what to watch</h3>
+          <ul id="b-watch" class="list"></ul>
+        </section>
 
-    <section class="card">
-      <h3>Verified claims</h3>
-      <div id="b-table"></div>
-    </section>
+        <section class="card">
+          <h3>Story</h3>
+          <div id="b-story" class="story"></div>
+          <p class="meta">Story written via: <span id="b-model"></span></p>
+        </section>
 
-    <section class="card" id="sec-drivers" hidden>
-      <h3>What drove the quarter</h3>
-      <ul id="b-drivers" class="list"></ul>
-    </section>
+        <section class="card">
+          <h3>Sources</h3>
+          <ul id="b-sources" class="sources"></ul>
+          <p class="meta">Trace: <span id="b-trace"></span></p>
+        </section>
 
-    <section class="card" id="sec-market" hidden>
-      <h3>Market reaction</h3>
-      <p id="b-reaction" class="body-text"></p>
-    </section>
+        <section class="card card-muted" id="sec-notes" hidden>
+          <h3>Data notes</h3>
+          <ul id="b-notes" class="list muted-list"></ul>
+        </section>
+      </article>
+    </main>
 
-    <section class="card" id="sec-watch" hidden>
-      <h3>Guidance and what to watch</h3>
-      <ul id="b-watch" class="list"></ul>
-    </section>
+    <!-- RIGHT RAIL: charts + at-a-glance, filled only from streamed data -->
+    <aside class="rail rail-right" aria-label="Charts">
+      <section class="card chart-card">
+        <h3>📊 Quarter trend</h3>
+        <p class="rail-hint">Revenue by quarter, from Scout facts. Hover for exact values.</p>
+        <div class="chart-wrap"><canvas id="chart-trend" height="190"></canvas></div>
+        <p class="chart-empty" id="chart-trend-empty">Run a briefing — this chart fills from its Scout facts.</p>
+      </section>
 
-    <section class="card">
-      <h3>Story</h3>
-      <div id="b-story" class="story"></div>
-      <p class="meta">Story written via: <span id="b-model"></span></p>
-    </section>
+      <section class="card chart-card">
+        <h3>📈 Growth, YoY</h3>
+        <p class="rail-hint">Analyst YoY claims only. Missing bars mean the Analyst made no such claim.</p>
+        <div class="chart-wrap"><canvas id="chart-growth" height="190"></canvas></div>
+        <p class="chart-empty" id="chart-growth-empty">Run a briefing — this chart fills from its Analyst claims.</p>
+      </section>
 
-    <section class="card">
-      <h3>Sources</h3>
-      <ul id="b-sources" class="sources"></ul>
-      <p class="meta">Trace: <span id="b-trace"></span></p>
-    </section>
+      <section class="card chart-card">
+        <h3>🎯 EPS vs consensus</h3>
+        <p class="rail-hint">Reported vs forecast, exactly as the Analyst claim states it.</p>
+        <div class="chart-wrap"><canvas id="chart-eps" height="190"></canvas></div>
+        <p class="chart-empty" id="chart-eps-empty">No EPS-vs-consensus claim in the latest run yet.</p>
+        <div class="chart-wrap chart-doughnut"><canvas id="chart-margin" height="150"></canvas></div>
+        <p class="chart-empty" id="chart-margin-empty">Operating margin appears here once the Analyst reports it.</p>
+      </section>
 
-    <section class="card card-muted" id="sec-notes" hidden>
-      <h3>Data notes</h3>
-      <ul id="b-notes" class="list muted-list"></ul>
-    </section>
-  </article>
+      <section class="card rail-card" id="glance-card">
+        <h3>At a glance</h3>
+        <dl class="glance" id="glance-list">
+          <div><dt>Latest quarter</dt><dd id="glance-quarter">—</dd></div>
+          <div><dt>Revenue</dt><dd id="glance-revenue">—</dd></div>
+          <div><dt>Operating margin</dt><dd id="glance-margin">—</dd></div>
+          <div><dt>EPS vs consensus</dt><dd id="glance-eps">—</dd></div>
+        </dl>
+        <p class="meta">Every figure here is copied from the Analyst table — it is a shortcut, not a second calculation.</p>
+      </section>
+    </aside>
+  </div>
 
   <footer>
     <p>Educational demo, not investment advice. No buy, sell, or hold recommendation
@@ -163,9 +262,13 @@
     call quotes come from the transcript.</p>
     <p class="footer-credit">Interface built on the shadcn/ui design system (MIT) — forked at
     <a href="https://github.com/tejpreetsingh1988/ui">tejpreetsingh1988/ui</a>.
+    Background: <a href="https://github.com/tsparticles/tsparticles">tsParticles</a> (MIT, slim bundle) over a CSS mesh.
+    Charts: <a href="https://github.com/chartjs/Chart.js">Chart.js</a> (MIT).
     <a href="companies/">Browse the company directory</a>.</p>
   </footer>
-</main>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/tsparticles-slim@2.12.0/tsparticles.slim.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
