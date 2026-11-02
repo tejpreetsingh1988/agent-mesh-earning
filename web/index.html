@@ -3,68 +3,110 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent Mesh Research Lab — Earnings Briefings</title>
+<title>Agent Mesh — Earnings Briefings</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<main>
-  <header>
-    <h1>Agent Mesh Research Lab</h1>
-    <p class="subtitle">Company earnings, verified before they&rsquo;re written. Scout collects the
+<main class="container">
+  <header class="page-head">
+    <h1>Agent Mesh</h1>
+    <p class="page-sub">Earnings briefings, verified before they&rsquo;re written. Scout collects the
     evidence, Analyst computes, Critic independently re-checks, Writer writes only
     from the approved record.</p>
   </header>
 
-  <section class="ask">
-    <label for="ticker">Ticker (US large-cap)</label>
-    <div class="ask-row">
-      <input id="ticker" type="text" value="GOOGL" maxlength="10" autocomplete="off" spellcheck="false">
-      <button id="go" type="button">Get briefing</button>
+  <section class="card search-card">
+    <label class="label" for="ticker">Ticker</label>
+    <div class="search-row">
+      <input id="ticker" type="text" value="GOOGL" maxlength="10" autocomplete="off" spellcheck="false" placeholder="e.g. GOOGL">
+      <button id="go" type="button" class="btn-primary">Get briefing</button>
     </div>
-    <p class="hint">Try GOOGL, AMZN, or HOOD. A full briefing takes roughly a minute: the
-    agents fetch filings, consensus, and the call transcript live.</p>
+    <div class="chips">
+      <span class="chips-label">Try</span>
+      <button type="button" class="chip" data-ticker="GOOGL">GOOGL</button>
+      <button type="button" class="chip" data-ticker="AMZN">AMZN</button>
+      <button type="button" class="chip" data-ticker="HOOD">HOOD</button>
+      <button type="button" class="chip" data-ticker="MSFT">MSFT</button>
+      <button type="button" class="chip" data-ticker="NVDA">NVDA</button>
+    </div>
+    <p class="hint">US large-caps, most recent reported quarter. A full briefing takes roughly a minute.</p>
   </section>
 
   <p id="status" class="status" hidden></p>
-  <p id="error" class="error" hidden></p>
+
+  <section id="skeleton" class="card" hidden aria-hidden="true">
+    <div class="sk sk-title"></div>
+    <div class="sk sk-line"></div>
+    <div class="sk sk-line"></div>
+    <div class="sk sk-line short"></div>
+  </section>
+
+  <section id="error" class="alert-error" hidden>
+    <p class="alert-title">Could not build a briefing</p>
+    <p id="error-msg" class="alert-msg"></p>
+  </section>
 
   <article id="briefing" hidden>
-    <p class="kicker"><span id="b-ticker"></span> &middot; <span id="b-quarter"></span></p>
+    <div class="badges">
+      <span class="badge badge-primary" id="b-ticker"></span>
+      <span class="badge badge-outline" id="b-quarter"></span>
+      <span class="badge badge-secondary">Critic approved</span>
+    </div>
     <h2 id="b-verdict" class="verdict"></h2>
 
-    <h3>Verified claims</h3>
-    <table>
-      <thead><tr><th>Claim</th><th>Value</th><th>Derivation</th></tr></thead>
-      <tbody id="b-table"></tbody>
-    </table>
-
-    <h3 id="h-drivers">What drove the quarter</h3>
-    <ul id="b-drivers"></ul>
-
-    <p id="b-reaction-wrap"><strong>Market reaction:</strong> <span id="b-reaction"></span></p>
-
-    <h3 id="h-watch">Guidance and what to watch</h3>
-    <ul id="b-watch"></ul>
-
-    <section id="sec-notes" hidden>
-      <h3>Data notes</h3>
-      <ul id="b-notes"></ul>
+    <section class="card">
+      <h3>Verified claims</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Claim</th><th class="num">Value</th><th>Derivation</th></tr></thead>
+          <tbody id="b-table"></tbody>
+        </table>
+      </div>
     </section>
 
-    <h3>Story</h3>
-    <div id="b-story" class="story"></div>
-    <p class="meta">Story written via: <span id="b-model"></span></p>
+    <section class="card" id="sec-drivers" hidden>
+      <h3>What drove the quarter</h3>
+      <ul id="b-drivers" class="list"></ul>
+    </section>
 
-    <h3>Sources</h3>
-    <ul id="b-sources" class="sources"></ul>
-    <p class="meta">Trace: <span id="b-trace"></span></p>
+    <section class="card" id="sec-market" hidden>
+      <h3>Market reaction</h3>
+      <p id="b-reaction" class="body-text"></p>
+    </section>
+
+    <section class="card" id="sec-watch" hidden>
+      <h3>Guidance and what to watch</h3>
+      <ul id="b-watch" class="list"></ul>
+    </section>
+
+    <section class="card">
+      <h3>Story</h3>
+      <div id="b-story" class="story"></div>
+      <p class="meta">Story written via: <span id="b-model"></span></p>
+    </section>
+
+    <section class="card">
+      <h3>Sources</h3>
+      <ul id="b-sources" class="sources"></ul>
+      <p class="meta">Trace: <span id="b-trace"></span></p>
+    </section>
+
+    <section class="card card-muted" id="sec-notes" hidden>
+      <h3>Data notes</h3>
+      <ul id="b-notes" class="list muted-list"></ul>
+    </section>
   </article>
 
   <footer>
-    <p>Educational demo, not investment advice. No buy, sell, or hold
-    recommendation and no price target, by design. Numbers come from SEC
-    filings and the consensus sources the agents cite; the story is prose
-    over the verified claims only, and call quotes come from the transcript.</p>
+    <p>Educational demo, not investment advice. No buy, sell, or hold recommendation
+    and no price target, by design. Numbers come from SEC filings and the consensus
+    sources the agents cite; the story is prose over the verified claims only, and
+    call quotes come from the transcript.</p>
+    <p class="footer-credit">Interface built on the shadcn/ui design system (MIT) — forked at
+    <a href="https://github.com/tejpreetsingh1988/ui">tejpreetsingh1988/ui</a>.</p>
   </footer>
 </main>
 <script src="app.js"></script>

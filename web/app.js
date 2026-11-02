@@ -21,14 +21,16 @@ function esc(s) {
   }[c]));
 }
 
-function show(el, on) { el.hidden = !on; }
+function show(el, on) { if (el) el.hidden = !on; }
 
 async function getBriefing() {
   const ticker = $("ticker").value.trim().toUpperCase();
   if (!ticker) return;
+  $("ticker").value = ticker;
   $("go").disabled = true;
   show($("briefing"), false);
   show($("error"), false);
+  show($("skeleton"), true);
   const status = $("status");
   show(status, true);
   const started = Date.now();
@@ -51,15 +53,15 @@ async function getBriefing() {
     }
     render(body.result);
   } catch (e) {
-    const err = $("error");
-    err.textContent = `Could not build a briefing for ${esc(ticker)}.\n${e.message}\n\n`
+    $("error-msg").textContent = `Could not build a briefing for ${ticker}.\n${e.message}\n\n`
       + `If this says Critic FAIL, the agents disagreed about a number and refused to publish — `
       + `that refusal is the product working. If it says NOT_REPORTED_YET, the company has not `
       + `reported its most recent quarter yet. Otherwise, try again in a minute.`;
-    show(err, true);
+    show($("error"), true);
   } finally {
     clearInterval(timer);
     show(status, false);
+    show($("skeleton"), false);
     $("go").disabled = false;
   }
 }
@@ -75,26 +77,13 @@ function render(b) {
     // the internal fact IDs are not something a reader can use.
     const value = Number.isFinite(row.value) ? String(Math.round(row.value * 10) / 10) : "—";
     const derivation = String(row.derivation || "").replace(/, from facts.*$/, "");
-    return `<tr><td>${esc(row.claim)}</td><td>${value}</td><td>${esc(derivation)}</td></tr>`;
+    return `<tr><td>${esc(row.claim)}</td><td class="num">${value}</td><td>${esc(derivation)}</td></tr>`;
   }).join("");
   const drivers = b.drivers || [];
-  show($("h-drivers"), drivers.length > 0);
-  show($("b-drivers"), drivers.length > 0);
+  show($("sec-drivers"), drivers.length > 0);
   $("b-drivers").innerHTML = drivers.map((d) => `<li>${esc(d)}</li>`).join("");
-  $("b-reaction").textContent = b.market_reaction
-    || "Not available in the cloud briefing — the Workers don't bundle a price feed, so this briefing covers filings, consensus, and the call only.";
-  // The Analyst copies pack.missing into risks, so tool notes (the
-  // absent price feed, in the cloud build) arrive inside
-  // guidance_and_watch. They are honest data notes, not guidance,
-  // so show them under their own heading instead of hiding them.
-  const isNote = (w) => /No module named|failed:/.test(w);
-  const watch = (b.guidance_and_watch || []).filter((w) => !isNote(w));
-  const notes = (b.guidance_and_watch || []).filter(isNote);
-  show($("h-watch"), watch.length > 0);
-  show($("b-watch"), watch.length > 0);
-  $("b-watch").innerHTML = watch.map((w) => `<li>${esc(w)}</li>`).join("");
-  show($("sec-notes"), notes.length > 0);
-  $("b-notes").innerHTML = notes.map((w) => `<li>${esc(w)}</li>`).join("");
+  show($("sec-market"), Boolean(b.market_reaction));
+  $("b-reaction").textContent = b.market_reaction || "";
   $("b-story").innerHTML = String(b.story || "").split(/\n\n+/).map((p) => `<p>${esc(p)}</p>`).join("");
   $("b-model").textContent = b.story_model || "—";
   $("b-sources").innerHTML = (b.sources || []).map((s) => {
@@ -103,10 +92,27 @@ function render(b) {
                  : `<li>${label}</li>`;
   }).join("");
   $("b-trace").textContent = b.trace_id || "—";
+  // The Analyst copies pack.missing into risks, so tool notes (the
+  // absent price feed, in the cloud build) arrive inside
+  // guidance_and_watch. They are honest data notes, not guidance,
+  // so show them under their own heading instead of hiding them.
+  const isNote = (w) => /No module named|failed:/.test(w);
+  const watch = (b.guidance_and_watch || []).filter((w) => !isNote(w));
+  const notes = (b.guidance_and_watch || []).filter(isNote);
+  show($("sec-watch"), watch.length > 0);
+  $("b-watch").innerHTML = watch.map((w) => `<li>${esc(w)}</li>`).join("");
+  show($("sec-notes"), notes.length > 0);
+  $("b-notes").innerHTML = notes.map((w) => `<li>${esc(w)}</li>`).join("");
   show($("briefing"), true);
 }
 
 $("go").addEventListener("click", getBriefing);
 $("ticker").addEventListener("keydown", (e) => {
   if (e.key === "Enter") getBriefing();
+});
+document.querySelectorAll(".chip").forEach((chip) => {
+  chip.addEventListener("click", () => {
+    $("ticker").value = chip.dataset.ticker;
+    getBriefing();
+  });
 });
