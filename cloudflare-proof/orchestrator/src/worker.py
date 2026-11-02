@@ -61,6 +61,37 @@ async def _handler(payload: dict) -> dict:
 app = create_app("orchestrator", async_handler=_handler, cors=True)
 
 
+# TEMPORARY DEBUG PROBE — remove after diagnosing the Orchestrator ->
+# Scout 404. It repeats the Scout POST with pyfetch directly (string
+# body, not bytes) and also GETs Scout /health, so one call separates
+# three hypotheses: bytes body vs string body, POST vs GET, and
+# Worker-to-Worker routing vs the app itself.
+@app.get("/debug/scout-post")
+async def _debug_scout_post():
+    import json as _json
+
+    from mesh.worker_http import _pyfetch
+
+    pf = _pyfetch()
+    if pf is None:
+        return {"probe": "not-in-worker"}
+    out = {}
+    try:
+        resp = await pf("https://mesh-scout-proof.tejpreetsingh1988.workers.dev/tasks/send",
+                        method="POST",
+                        headers={"Content-Type": "application/json"},
+                        body=_json.dumps({"ticker": "GOOGL"}))
+        out["post_str"] = {"status": resp.status, "body_snippet": (await resp.text())[:500]}
+    except Exception as e:
+        out["post_str"] = {"error": str(e)[:300]}
+    try:
+        resp = await pf("https://mesh-scout-proof.tejpreetsingh1988.workers.dev/health")
+        out["get_health"] = {"status": resp.status, "body_snippet": (await resp.text())[:200]}
+    except Exception as e:
+        out["get_health"] = {"error": str(e)[:300]}
+    return out
+
+
 # Cloudflare Workers entrypoint. In the Worker runtime, `workers` is provided;
 # locally it is absent, so the import is guarded and Default stays None there.
 try:
