@@ -6,5 +6,8 @@
     "global_fetch_strictly_public"
   ],
   "main": "src/worker.py",
-  "name": "mesh-orchestrator-proof"
+  "name": "mesh-orchestrator-proof",
+  "observability": {
+    "enabled": true
+  }
 }
