@@ -8,6 +8,7 @@ import uuid
 from mesh.agent_app import create_app
 from mesh.schemas import Analysis, EvidencePack
 from mesh.story_async import build_story_async
+from mesh.worker_env import worker_env_value
 from mesh.writer import write_briefing
 
 
@@ -19,7 +20,7 @@ async def _handler(payload: dict) -> dict:
     pack = EvidencePack.model_validate(pack_data)
     analysis = Analysis.model_validate(analysis_data)
     trace_id = payload.get("trace_id") or str(uuid.uuid4())
-    return write_briefing(pack, analysis, trace_id, story_result=await build_story_async(pack, analysis)).model_dump(mode="json")
+    return write_briefing(pack, analysis, trace_id, story_result=await build_story_async(pack, analysis, api_key=worker_env_value("OPENROUTER_API_KEY"))).model_dump(mode="json")
 
 
 app = create_app("writer", async_handler=_handler)
