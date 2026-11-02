@@ -4,6 +4,9 @@
   "compatibility_flags": [
     "python_workers"
   ],
+  "observability": {
+    "enabled": true
+  },
   "main": "src/worker.py",
   "name": "mesh-critic-proof"
 }
