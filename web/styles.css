@@ -369,3 +369,9 @@ footer a { color: var(--foreground); text-underline-offset: 4px; }
   .agent-body .table-wrap { margin: 0 -16px; padding: 0 16px; }
   .conductor { padding: 14px 16px; }
 }
+
+/* ---- Company-name search ---- */
+.search-results { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.search-results[hidden] { display: none; }
+.search-match { cursor: pointer; }
+.search-empty { font-size: 13px; color: var(--muted-foreground); margin: 0; }

@@ -19,6 +19,18 @@
   </header>
 
   <section class="card search-card">
+    <label class="label" for="company-search">Search by company name</label>
+    <div class="search-row">
+      <input id="company-search" type="text" maxlength="100" autocomplete="off" spellcheck="false" placeholder="e.g. Apple, Nvidia, Costco">
+      <button id="company-go" type="button" class="btn-primary">Search</button>
+    </div>
+    <div id="company-results" class="search-results" hidden></div>
+    <p class="hint">Name search runs on Cloudflare AI Search over the
+    <a href="companies/">company directory</a> — pick a match and its briefing runs.
+    Only one search per click, so the free query pool is never burned by typing.</p>
+  </section>
+
+  <section class="card search-card">
     <label class="label" for="ticker">Ticker</label>
     <div class="search-row">
       <input id="ticker" type="text" value="GOOGL" maxlength="10" autocomplete="off" spellcheck="false" placeholder="e.g. GOOGL">
@@ -172,7 +184,8 @@
     sources the agents cite; the story is prose over the verified claims only, and
     call quotes come from the transcript.</p>
     <p class="footer-credit">Interface built on the shadcn/ui design system (MIT) — forked at
-    <a href="https://github.com/tejpreetsingh1988/ui">tejpreetsingh1988/ui</a>.</p>
+    <a href="https://github.com/tejpreetsingh1988/ui">tejpreetsingh1988/ui</a>.
+    <a href="companies/">Browse the company directory</a>.</p>
   </footer>
 </main>
 <script src="app.js"></script>

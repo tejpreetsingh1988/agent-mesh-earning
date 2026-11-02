@@ -408,3 +408,116 @@ document.querySelectorAll(".chip").forEach((chip) => {
     getBriefing();
   });
 });
+
+// ---- Company-name search (Cloudflare AI Search) ----
+// The namespace public endpoint searches ONLY the "companies"
+// instance (allowlisted server-side), rate-limited to 60/min
+// and host-locked to this site. Search runs on button/Enter
+// only — never per keystroke — and results are cached per
+// query for the session, so the free query pool (1,000
+// semantic/month) is never burned by typing.
+//
+// Response-shape note: the parser below is deliberately
+// tolerant (several field names, ticker from the source URL
+// or from "Ticker: XXX" in the chunk text) because the live
+// response shape is confirmed by probing once the index holds
+// documents, not assumed from docs. If the probe shows a
+// different shape, this parser is the one place to fix.
+const SEARCH_URL = "https://ns-cc6b2129-061a-495e-bfa6-d2a47919f37a.search.ai.cloudflare.com/search";
+const searchCache = new Map();
+let searching = false;
+
+function itemText(item) {
+  if (!item || typeof item !== "object") return "";
+  for (const key of ["content", "text", "snippet", "response_text"]) {
+    if (typeof item[key] === "string" && item[key]) return item[key];
+  }
+  return "";
+}
+
+function itemSource(item) {
+  if (!item || typeof item !== "object") return "";
+  const meta = item.metadata || {};
+  for (const key of ["url", "source", "filename", "key", "name"]) {
+    if (typeof item[key] === "string" && item[key]) return item[key];
+    if (typeof meta[key] === "string" && meta[key]) return meta[key];
+  }
+  return "";
+}
+
+function matchFromItem(item) {
+  const text = itemText(item);
+  const source = itemSource(item);
+  const urlMatch = source.match(/\/companies\/([A-Z]{1,5})\b/);
+  const textMatch = text.match(/Ticker:\s*([A-Z]{1,5})\b/);
+  const ticker = (urlMatch && urlMatch[1]) || (textMatch && textMatch[1]);
+  if (!ticker) return null;
+  const heading = text.match(/#\s*([^#\n(]+?)\s*\(\s*[A-Z]{1,5}\s*\)/);
+  const name = heading ? heading[1].trim() : ticker;
+  return { ticker, name };
+}
+
+function renderSearchResults(matches, query) {
+  const box = $("company-results");
+  if (!matches.length) {
+    box.innerHTML = `<p class="search-empty">No company matched "${esc(query)}" — try the ticker directly below. `
+      + `If the directory index is still building, matches appear once it holds documents.</p>`;
+  } else {
+    box.innerHTML = matches.map((m) =>
+      `<button type="button" class="chip search-match" data-ticker="${esc(m.ticker)}">`
+      + `${esc(m.name)} (${esc(m.ticker)})</button>`).join("");
+    box.querySelectorAll(".search-match").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        $("ticker").value = btn.dataset.ticker;
+        show(box, false);
+        getBriefing();
+      });
+    });
+  }
+  show(box, true);
+}
+
+async function searchCompanies() {
+  const query = $("company-search").value.trim();
+  const box = $("company-results");
+  if (!query || searching) return;
+  if (searchCache.has(query)) {
+    renderSearchResults(searchCache.get(query), query);
+    return;
+  }
+  searching = true;
+  box.innerHTML = `<p class="search-empty">Searching…</p>`;
+  show(box, true);
+  try {
+    const resp = await fetch(SEARCH_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: query }] }),
+    });
+    if (!resp.ok) throw new Error(`Search failed (HTTP ${resp.status})`);
+    const body = await resp.json();
+    const items = body.data || body.results || body.chunks || [];
+    const seen = new Set();
+    const matches = [];
+    for (const item of items) {
+      const m = matchFromItem(item);
+      if (m && !seen.has(m.ticker)) {
+        seen.add(m.ticker);
+        matches.push(m);
+        if (matches.length >= 5) break;
+      }
+    }
+    searchCache.set(query, matches);
+    renderSearchResults(matches, query);
+  } catch (e) {
+    box.innerHTML = `<p class="search-empty">Company search is unavailable right now (${esc(e.message)}) — use the ticker box below.</p>`;
+    show(box, true);
+  } finally {
+    searching = false;
+  }
+}
+
+$("company-go").addEventListener("click", searchCompanies);
+$("company-search").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") searchCompanies();
+});
