@@ -84,7 +84,14 @@ function render(b) {
   $("b-drivers").innerHTML = drivers.map((d) => `<li>${esc(d)}</li>`).join("");
   show($("sec-market"), Boolean(b.market_reaction));
   $("b-reaction").textContent = b.market_reaction || "";
-  $("b-story").innerHTML = String(b.story || "").split(/\n\n+/).map((p) => `<p>${esc(p)}</p>`).join("");
+  // LLM stories use markdown bold for lead-ins. The page renders
+  // plain text, so convert matched **bold** to <strong> (after
+  // escaping, so this cannot inject markup) and drop any stray
+  // markers instead of showing literal asterisks.
+  $("b-story").innerHTML = String(b.story || "").split(/\n\n+/).map((p) => {
+    const html = esc(p).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/\*\*/g, "");
+    return `<p>${html}</p>`;
+  }).join("");
   $("b-model").textContent = b.story_model || "—";
   $("b-sources").innerHTML = (b.sources || []).map((s) => {
     const label = esc(s.publisher || "Source");
