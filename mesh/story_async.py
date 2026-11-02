@@ -11,17 +11,18 @@ Anything else — no key, a failed call, a failed validation —
 falls back to the deterministic story, with the model note saying
 so, exactly like build_story.
 
-Key handling, stated plainly: the key is read from
-OPENROUTER_API_KEY in the process environment. In a Worker that
-means a secret set on the Worker (dashboard: Settings →
-Variables → Secrets, or `wrangler secret put`). Whether the
-Python Worker runtime surfaces secrets into os.environ is NOT
-proven — the live Writer run will show it in story_model: a
-model name means the key was visible; "deterministic (no
-OPENROUTER_API_KEY configured)" means it was not, and the
-briefing is still complete, just without an LLM story. The key
-is never sent from the browser and never appears in a request
-payload between Workers.
+Key handling, stated plainly: build_story_async takes an explicit
+api_key, falling back to OPENROUTER_API_KEY in the process
+environment (the Docker path, where the host .env supplies it).
+In a Worker, dashboard secrets are NOT visible in os.environ —
+they live on the Worker env object — so the Writer Worker passes
+the key explicitly from mesh.worker_env.worker_env_value
+("OPENROUTER_API_KEY"), which reads the `workers.env` object.
+A model name in story_model means the key was visible; a
+"deterministic (no OPENROUTER_API_KEY configured)" note means
+it was not, and the briefing is still complete, just without an
+LLM story. The key is never sent from the browser and never
+appears in a request payload between Workers.
 
 Per-model timeout is 60s here (Docker uses 120s): a demo
 briefing should fail over to the next model — or to the
@@ -39,6 +40,7 @@ from .llm import (
     deterministic_story,
     validate_story,
 )
+from .worker_ai import WORKERS_AI_MODEL, WORKERS_AI_TIMEOUT_S, call_workers_ai
 from .worker_http import post_json
 
 MODEL_TIMEOUT_S = 60
@@ -67,18 +69,44 @@ async def _call_openrouter_async(model: str, system: str, user: str, api_key: st
             "latency_s": round(time.monotonic() - started, 1)}
 
 
-async def build_story_async(pack, analysis, llm_call=None, api_key: str | None = None) -> dict:
+async def build_story_async(pack, analysis, llm_call=None, api_key: str | None = None,
+                            ai=None, ai_model: str = WORKERS_AI_MODEL) -> dict:
     """Async twin of llm.build_story. llm_call(model, system, user)
     -> awaitable dict is injected by tests; in production it
-    defaults to the direct OpenRouter POST above."""
+    defaults to the direct OpenRouter POST above.
+
+    Source order: Workers AI first when an `ai` binding is given
+    (no key, no third-party rate limit), then the OpenRouter
+    chain, then the deterministic story. A Workers AI failure —
+    exception or validation failure — is recorded and falls
+    through, never breaking the briefing."""
     key = api_key if api_key is not None else os.environ.get("OPENROUTER_API_KEY", "")
     system, user = _prompt(pack, analysis)
+    errors: list[str] = []
+    if ai is not None:
+        try:
+            result = await asyncio.wait_for(call_workers_ai(ai, ai_model, system, user),
+                                            timeout=WORKERS_AI_TIMEOUT_S)
+        except Exception as e:
+            errors.append(f"Workers AI {ai_model}: {e}")
+        else:
+            text = (result or {}).get("text", "") or ""
+            ok, reason = validate_story(text, pack, analysis)
+            if not ok:
+                errors.append(f"Workers AI {ai_model}: validation failed: {reason}")
+            else:
+                return {"story": text.strip(),
+                        "model": f"{ai_model} (Workers AI)",
+                        "tokens_in": result.get("tokens_in"),
+                        "tokens_out": result.get("tokens_out"),
+                        "latency_s": result.get("latency_s")}
     if llm_call is None and not key:
+        suffix = f" ({'; '.join(errors)}; no OPENROUTER_API_KEY configured)" if errors \
+            else " (no OPENROUTER_API_KEY configured)"
         return {"story": deterministic_story(pack, analysis),
-                "model": "deterministic (no OPENROUTER_API_KEY configured)",
+                "model": f"deterministic{suffix}",
                 "tokens_in": None, "tokens_out": None, "latency_s": None}
     caller = llm_call or (lambda model, s, u: _call_openrouter_async(model, s, u, key))
-    errors: list[str] = []
     for model in MODELS:
         try:
             result = await asyncio.wait_for(caller(model, system, user), timeout=MODEL_TIMEOUT_S)
