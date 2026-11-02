@@ -130,7 +130,23 @@ body {
 .chip:hover { background: var(--muted); }
 .hint { font-size: 13px; color: var(--muted-foreground); margin: 12px 0 0; }
 
-.status { font-size: 14px; color: var(--muted-foreground); margin: 16px 0 0; }
+.log-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.log-list li { font-size: 14px; color: var(--muted-foreground); }
+.log-list time { font-variant-numeric: tabular-nums; color: var(--foreground); }
+.btn-secondary {
+  height: 36px;
+  padding: 0 14px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 4px);
+  cursor: pointer;
+  margin-top: 12px;
+}
+.btn-secondary:hover { background: var(--muted); }
 
 .sk {
   height: 16px;

@@ -32,10 +32,15 @@
       <button type="button" class="chip" data-ticker="MSFT">MSFT</button>
       <button type="button" class="chip" data-ticker="NVDA">NVDA</button>
     </div>
-    <p class="hint">US large-caps, most recent reported quarter. A full briefing takes roughly a minute.</p>
+    <p class="hint">US large-caps, most recent reported quarter. Watch the agents work in the live log below.</p>
   </section>
 
-  <p id="status" class="status" hidden></p>
+  <section id="log" class="card" hidden>
+    <h3>Live log</h3>
+    <ul id="log-list" class="log-list"></ul>
+    <p class="meta" id="log-now"></p>
+    <button id="log-download" type="button" class="btn-secondary">Download log</button>
+  </section>
 
   <section id="skeleton" class="card" hidden aria-hidden="true">
     <div class="sk sk-title"></div>
