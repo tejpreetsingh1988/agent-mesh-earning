@@ -19,33 +19,16 @@
   </header>
 
   <section class="card search-card">
-    <label class="label" for="company-search">Search by company name</label>
+    <label class="label" for="company-search">Search by company name or ticker</label>
     <div class="search-row">
-      <input id="company-search" type="text" maxlength="100" autocomplete="off" spellcheck="false" placeholder="e.g. Apple, Nvidia, Costco">
+      <input id="company-search" type="text" maxlength="100" autocomplete="off" spellcheck="false" placeholder="e.g. Apple, Nvidia, Costco, or GOOGL">
       <button id="company-go" type="button" class="btn-primary">Search</button>
     </div>
     <div id="company-results" class="search-results" hidden></div>
-    <p class="hint">Name search runs on Cloudflare AI Search over the
+    <p class="hint">Search runs on Cloudflare AI Search over the
     <a href="companies/">company directory</a> — pick a match and its briefing runs.
+    Typing a ticker works too, since each company page carries its ticker.
     Only one search per click, so the free query pool is never burned by typing.</p>
-  </section>
-
-  <section class="card search-card">
-    <label class="label" for="ticker">Ticker</label>
-    <div class="search-row">
-      <input id="ticker" type="text" value="GOOGL" maxlength="10" autocomplete="off" spellcheck="false" placeholder="e.g. GOOGL">
-      <button id="go" type="button" class="btn-primary">Get briefing</button>
-    </div>
-    <div class="chips">
-      <span class="chips-label">Try</span>
-      <button type="button" class="chip" data-ticker="GOOGL">GOOGL</button>
-      <button type="button" class="chip" data-ticker="AMZN">AMZN</button>
-      <button type="button" class="chip" data-ticker="HOOD">HOOD</button>
-      <button type="button" class="chip" data-ticker="MSFT">MSFT</button>
-      <button type="button" class="chip" data-ticker="NVDA">NVDA</button>
-    </div>
-    <p class="hint">US large-caps, most recent reported quarter. The agents work in order —
-    Scout&rsquo;s card lands first, usually within a few seconds.</p>
   </section>
 
   <section id="agents" hidden>

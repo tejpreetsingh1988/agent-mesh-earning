@@ -399,12 +399,17 @@ async function runPost(ticker) {
   render(body.result);
 }
 
-async function getBriefing() {
-  const ticker = $("ticker").value.trim().toUpperCase();
+// The ticker box is gone (Nov 2, 2026): the company search is
+// the only search. The briefing's ticker lives here, set by the
+// suggestion click that starts the run.
+let currentTicker = "";
+
+async function getBriefing(ticker) {
+  ticker = String(ticker || "").trim().toUpperCase();
   if (!ticker || running) return;
+  currentTicker = ticker;
   running = true;
-  $("ticker").value = ticker;
-  $("go").disabled = true;
+  $("company-go").disabled = true;
   show($("briefing"), false);
   show($("error"), false);
   show($("agents"), true);
@@ -435,7 +440,7 @@ async function getBriefing() {
     }
   } finally {
     stopElapsed($("conductor-time").textContent || undefined);
-    $("go").disabled = false;
+    $("company-go").disabled = false;
     running = false;
   }
 }
@@ -445,7 +450,7 @@ $("log-download").addEventListener("click", () => {
   const blob = new Blob([logLines.join("\n") + "\n"], { type: "text/plain" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `briefing-${$("ticker").value.trim().toUpperCase()}-log.txt`;
+  a.download = `briefing-${currentTicker || "BRIEFING"}-log.txt`;
   a.click();
   URL.revokeObjectURL(a.href);
 });
@@ -491,16 +496,7 @@ function render(b) {
   show($("briefing"), true);
 }
 
-$("go").addEventListener("click", getBriefing);
-$("ticker").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") getBriefing();
-});
-document.querySelectorAll(".chip").forEach((chip) => {
-  chip.addEventListener("click", () => {
-    $("ticker").value = chip.dataset.ticker;
-    getBriefing();
-  });
-});
+
 
 // ---- Company-name search (Cloudflare AI Search) ----
 // The namespace public endpoint searches ONLY the "companies"
@@ -557,17 +553,16 @@ function matchFromItem(item) {
 function renderSearchResults(matches, query) {
   const box = $("company-results");
   if (!matches.length) {
-    box.innerHTML = `<p class="search-empty">No company matched "${esc(query)}" — try the ticker directly below. `
-      + `If the directory index is still building, matches appear once it holds documents.</p>`;
+    box.innerHTML = `<p class="search-empty">No company matched "${esc(query)}" — try a different spelling, `
+      + `or a ticker like GOOGL (each company page carries its ticker).</p>`;
   } else {
     box.innerHTML = matches.map((m) =>
       `<button type="button" class="chip search-match" data-ticker="${esc(m.ticker)}">`
       + `${esc(m.name)} (${esc(m.ticker)})</button>`).join("");
     box.querySelectorAll(".search-match").forEach((btn) => {
       btn.addEventListener("click", () => {
-        $("ticker").value = btn.dataset.ticker;
         show(box, false);
-        getBriefing();
+        getBriefing(btn.dataset.ticker);
       });
     });
   }
