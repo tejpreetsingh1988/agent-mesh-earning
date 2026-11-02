@@ -85,8 +85,13 @@ def _writer() -> None:
     # ai_binding() returns None locally and in Workers without
     # the ai binding declared, so the OpenRouter path is
     # unchanged there (see mesh/worker_ai.py, ADR 015).
+    # The OpenRouter fallback is routed via AI Gateway when the
+    # GATEWAY_OPENROUTER_URL Worker variable is set (BYOK key,
+    # analytics, caching); otherwise it goes direct with the
+    # key header (see ADR 016). The variable is set in the
+    # dashboard, never baked into the repo.
     base = base.replace("return write_briefing(pack, analysis, trace_id).model_dump(mode=\"json\")",
-                        "return write_briefing(pack, analysis, trace_id, story_result=await build_story_async(pack, analysis, api_key=worker_env_value(\"OPENROUTER_API_KEY\"), ai=ai_binding())).model_dump(mode=\"json\")")
+                        "return write_briefing(pack, analysis, trace_id, story_result=await build_story_async(pack, analysis, api_key=worker_env_value(\"OPENROUTER_API_KEY\"), ai=ai_binding(), gateway_url=worker_env_value(\"GATEWAY_OPENROUTER_URL\"))).model_dump(mode=\"json\")")
     base = base.replace('app = create_app("writer", handler=_handler)',
                         'app = create_app("writer", async_handler=_handler)')
     _sync("writer",
