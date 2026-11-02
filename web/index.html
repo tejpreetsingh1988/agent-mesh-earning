@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Mesh Research Lab — Earnings Briefings</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>Agent Mesh Research Lab</h1>
+    <p class="subtitle">Company earnings, verified before they&rsquo;re written. Scout collects the
+    evidence, Analyst computes, Critic independently re-checks, Writer writes only
+    from the approved record.</p>
+  </header>
+
+  <section class="ask">
+    <label for="ticker">Ticker (US large-cap)</label>
+    <div class="ask-row">
+      <input id="ticker" type="text" value="GOOGL" maxlength="10" autocomplete="off" spellcheck="false">
+      <button id="go" type="button">Get briefing</button>
+    </div>
+    <p class="hint">Try GOOGL, AMZN, or HOOD. A full briefing takes roughly a minute: the
+    agents fetch filings, consensus, and the call transcript live.</p>
+  </section>
+
+  <p id="status" class="status" hidden></p>
+  <p id="error" class="error" hidden></p>
+
+  <article id="briefing" hidden>
+    <p class="kicker"><span id="b-ticker"></span> &middot; <span id="b-quarter"></span></p>
+    <h2 id="b-verdict" class="verdict"></h2>
+
+    <h3>Verified claims</h3>
+    <table>
+      <thead><tr><th>Claim</th><th>Value</th><th>Derivation</th></tr></thead>
+      <tbody id="b-table"></tbody>
+    </table>
+
+    <h3>What drove the quarter</h3>
+    <ul id="b-drivers"></ul>
+
+    <p id="b-reaction-wrap"><strong>Market reaction:</strong> <span id="b-reaction"></span></p>
+
+    <h3>Guidance and what to watch</h3>
+    <ul id="b-watch"></ul>
+
+    <h3>Story</h3>
+    <div id="b-story" class="story"></div>
+    <p class="meta">Story written via: <span id="b-model"></span></p>
+
+    <h3>Sources</h3>
+    <ul id="b-sources" class="sources"></ul>
+    <p class="meta">Trace: <span id="b-trace"></span></p>
+  </article>
+
+  <footer>
+    <p>Educational demo, not investment advice. No buy, sell, or hold
+    recommendation and no price target, by design. Numbers come from SEC
+    filings and the consensus sources the agents cite; the story is prose
+    over the verified claims only, and call quotes come from the transcript.</p>
+  </footer>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

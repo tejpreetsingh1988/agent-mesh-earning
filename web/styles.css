@@ -1,0 +1,88 @@
+/* Paper and ink, same language as the Streamlit UI: paper #faf8f4,
+   ink #161613, one muted green accent #1f4d3a, 1px rules. No
+   gradients, shadows, pills, or marketing copy. */
+:root {
+  --paper: #faf8f4;
+  --ink: #161613;
+  --green: #1f4d3a;
+  --rule: #d8d2c4;
+  --muted: #5c5648;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1.6;
+}
+
+main {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+}
+
+header { border-bottom: 1px solid var(--rule); padding-bottom: 1rem; }
+
+h1 { font-size: 1.6rem; margin: 0 0 0.25rem; }
+h2, h3 { color: var(--ink); }
+h3 { font-size: 1.05rem; margin: 1.75rem 0 0.5rem; border-top: 1px solid var(--rule); padding-top: 1rem; }
+
+.subtitle, .hint, .meta, footer p { color: var(--muted); font-size: 0.9rem; }
+.subtitle { margin: 0; }
+
+.ask { margin: 1.5rem 0; }
+.ask label { display: block; font-size: 0.9rem; margin-bottom: 0.35rem; }
+.ask-row { display: flex; gap: 0.5rem; }
+
+input {
+  font-family: inherit;
+  font-size: 1.05rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--rule);
+  background: #fff;
+  color: var(--ink);
+  width: 10rem;
+  text-transform: uppercase;
+}
+
+button {
+  font-family: inherit;
+  font-size: 1rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--green);
+  background: var(--green);
+  color: #fff;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.55; cursor: default; }
+
+.status { color: var(--green); }
+.error {
+  border: 1px solid #a33;
+  padding: 0.75rem 1rem;
+  color: #7a1f1f;
+  background: #fdf3f3;
+  white-space: pre-wrap;
+}
+
+.kicker { color: var(--muted); font-size: 0.9rem; letter-spacing: 0.04em; text-transform: uppercase; }
+.verdict { font-size: 1.45rem; line-height: 1.35; margin: 0.25rem 0 0; }
+
+table { width: 100%; border-collapse: collapse; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.85rem; }
+th, td { text-align: left; padding: 0.45rem 0.5rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { color: var(--muted); font-weight: normal; }
+td:nth-child(2) { white-space: nowrap; }
+
+ul { padding-left: 1.25rem; }
+li { margin-bottom: 0.35rem; }
+
+.story p { margin: 0 0 1rem; }
+.sources { list-style: none; padding-left: 0; }
+.sources li { font-size: 0.9rem; }
+.sources a { color: var(--green); }
+
+footer { border-top: 1px solid var(--rule); margin-top: 3rem; padding-top: 1rem; }
