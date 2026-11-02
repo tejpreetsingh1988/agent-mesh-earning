@@ -13,9 +13,9 @@
 <main class="container">
   <header class="page-head">
     <h1>Agent Mesh</h1>
-    <p class="page-sub">Earnings briefings, verified before they&rsquo;re written. Scout collects the
-    evidence, Analyst computes, Critic independently re-checks, Writer writes only
-    from the approved record.</p>
+    <p class="page-sub">Earnings briefings, verified before they&rsquo;re written. Four agents do the
+    work in order, each accountable for its own step — watch their cards fill in
+    below as each one finishes.</p>
   </header>
 
   <section class="card search-card">
@@ -32,7 +32,75 @@
       <button type="button" class="chip" data-ticker="MSFT">MSFT</button>
       <button type="button" class="chip" data-ticker="NVDA">NVDA</button>
     </div>
-    <p class="hint">US large-caps, most recent reported quarter. Watch the agents work in the live log below.</p>
+    <p class="hint">US large-caps, most recent reported quarter. The agents work in order —
+    Scout&rsquo;s card lands first, usually within a few seconds.</p>
+  </section>
+
+  <section id="agents" hidden>
+    <div class="conductor card">
+      <span class="conductor-dot" id="conductor-dot"></span>
+      <div class="conductor-text">
+        <strong id="conductor-status">Conductor — Pipeline Lead</strong>
+        <span id="conductor-detail">Runs the agents in order and enforces the Critic gate.</span>
+      </div>
+      <span class="conductor-time" id="conductor-time"></span>
+    </div>
+
+    <article class="agent-card" id="card-scout" data-agent="scout">
+      <header class="agent-head">
+        <span class="agent-dot"></span>
+        <div class="agent-title">
+          <strong>Scout — Evidence Hunter</strong>
+          <span>Finds the filing, the numbers, and the call transcript.</span>
+        </div>
+        <span class="agent-status" data-status>Waiting</span>
+        <span class="agent-time" data-time></span>
+      </header>
+      <p class="agent-accountable">Accountable for: every fact names its source. Nothing is invented.</p>
+      <div class="agent-body" data-body><p class="agent-waiting">Waiting for the pipeline to reach Scout.</p></div>
+    </article>
+
+    <article class="agent-card" id="card-analyst" data-agent="analyst">
+      <header class="agent-head">
+        <span class="agent-dot"></span>
+        <div class="agent-title">
+          <strong>Analyst — Numbers Desk</strong>
+          <span>Computes growth, margins, beats and misses.</span>
+        </div>
+        <span class="agent-status" data-status>Waiting</span>
+        <span class="agent-time" data-time></span>
+      </header>
+      <p class="agent-accountable">Accountable for: every claim shows its arithmetic and period.</p>
+      <div class="agent-body" data-body><p class="agent-waiting">Waiting for Scout&rsquo;s facts.</p></div>
+    </article>
+
+    <article class="agent-card" id="card-critic" data-agent="critic">
+      <header class="agent-head">
+        <span class="agent-dot"></span>
+        <div class="agent-title">
+          <strong>Critic — Truth Gate</strong>
+          <span>Independently re-verifies every number.</span>
+        </div>
+        <span class="agent-status" data-status>Waiting</span>
+        <span class="agent-time" data-time></span>
+      </header>
+      <p class="agent-accountable">Accountable for: nothing ships without its pass. A fail stops the briefing.</p>
+      <div class="agent-body" data-body><p class="agent-waiting">Waiting for Analyst&rsquo;s claims.</p></div>
+    </article>
+
+    <article class="agent-card" id="card-writer" data-agent="writer">
+      <header class="agent-head">
+        <span class="agent-dot"></span>
+        <div class="agent-title">
+          <strong>Writer — Storyteller</strong>
+          <span>Turns verified claims into the narrative.</span>
+        </div>
+        <span class="agent-status" data-status>Waiting</span>
+        <span class="agent-time" data-time></span>
+      </header>
+      <p class="agent-accountable">Accountable for: every figure traces to a claim or the transcript.</p>
+      <div class="agent-body" data-body><p class="agent-waiting">Waiting for Critic&rsquo;s pass.</p></div>
+    </article>
   </section>
 
   <section id="log" class="card" hidden>
@@ -40,13 +108,6 @@
     <ul id="log-list" class="log-list"></ul>
     <p class="meta" id="log-now"></p>
     <button id="log-download" type="button" class="btn-secondary">Download log</button>
-  </section>
-
-  <section id="skeleton" class="card" hidden aria-hidden="true">
-    <div class="sk sk-title"></div>
-    <div class="sk sk-line"></div>
-    <div class="sk sk-line"></div>
-    <div class="sk sk-line short"></div>
   </section>
 
   <section id="error" class="alert-error" hidden>

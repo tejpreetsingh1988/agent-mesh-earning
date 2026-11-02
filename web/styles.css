@@ -243,3 +243,129 @@ footer a { color: var(--foreground); text-underline-offset: 4px; }
   .table-wrap { margin: 0 -16px; padding: 0 16px; }
   th, td { padding-right: 12px; }
 }
+
+/* ---- Progressive agent cards ---- */
+/* One accent color per agent, applied as a left bar and a dot.
+   The rest of the card stays in the zinc system: white, 1px
+   border, no gradients. Status is carried by the pill and the
+   dot, never by color alone. */
+
+.agent-card[data-agent="scout"] { --agent: #0f766e; --agent-tint: #f0fdfa; }
+.agent-card[data-agent="analyst"] { --agent: #1d4ed8; --agent-tint: #eff6ff; }
+.agent-card[data-agent="critic"] { --agent: #b45309; --agent-tint: #fffbeb; }
+.agent-card[data-agent="writer"] { --agent: #6d28d9; --agent-tint: #f5f3ff; }
+
+.conductor {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0 12px;
+  padding: 16px 24px;
+}
+.conductor-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted-foreground);
+  flex-shrink: 0;
+}
+.conductor-text { display: flex; flex-direction: column; min-width: 0; }
+.conductor-text strong { font-size: 14px; font-weight: 600; }
+.conductor-text span { font-size: 13px; color: var(--muted-foreground); }
+.conductor-time {
+  margin-left: auto;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+.agent-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--agent);
+  border-radius: calc(var(--radius) + 2px);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
+  padding: 20px 24px;
+  margin-top: 12px;
+}
+.agent-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.agent-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--agent);
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+.agent-card[data-state="working"] .agent-dot {
+  animation: dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.8); }
+}
+.agent-title { display: flex; flex-direction: column; min-width: 0; }
+.agent-title strong { font-size: 15px; font-weight: 600; }
+.agent-title span { font-size: 13px; color: var(--muted-foreground); }
+.agent-status {
+  margin-left: auto;
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: calc(var(--radius) - 4px);
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+}
+.agent-card[data-state="working"] .agent-status {
+  background: var(--agent-tint);
+  color: var(--agent);
+}
+.agent-card[data-state="done"] .agent-status {
+  background: #f0fdf4;
+  color: #15803d;
+}
+.agent-card[data-state="revising"] .agent-status {
+  background: #fffbeb;
+  color: #b45309;
+}
+.agent-card[data-state="failed"] .agent-status {
+  background: var(--destructive-bg);
+  color: #991b1b;
+}
+.agent-time {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+  padding-top: 3px;
+}
+.agent-accountable {
+  font-size: 13px;
+  color: var(--muted-foreground);
+  margin: 12px 0 0;
+}
+.agent-body { margin-top: 16px; }
+.agent-body .table-wrap { margin: 0 -24px; padding: 0 24px; }
+.agent-body table { font-size: 13px; }
+.agent-waiting { color: var(--muted-foreground); font-size: 14px; margin: 0; }
+.agent-filing { font-size: 14px; font-weight: 500; margin: 0 0 12px; }
+.agent-note { font-size: 13px; color: var(--muted-foreground); margin: 0 0 12px; }
+.agent-pass { font-size: 14px; color: #15803d; margin: 0; }
+.agent-fail { font-size: 14px; color: #991b1b; margin: 0 0 12px; }
+.agent-body .story p { margin: 0 0 12px; font-size: 14px; line-height: 1.7; color: #3f3f46; }
+.agent-body .story p:last-child { margin-bottom: 0; }
+
+@media (max-width: 560px) {
+  .agent-card { padding: 16px; }
+  .agent-body .table-wrap { margin: 0 -16px; padding: 0 16px; }
+  .conductor { padding: 14px 16px; }
+}
