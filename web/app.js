@@ -69,12 +69,32 @@ function render(b) {
   $("b-quarter").textContent = b.quarter_label;
   $("b-verdict").textContent = b.verdict;
   $("b-table").innerHTML = (b.table || []).map((row) => {
-    const value = row.value === null || row.value === undefined ? "—" : esc(row.value);
-    return `<tr><td>${esc(row.claim)}</td><td>${value}</td><td>${esc(row.derivation)}</td></tr>`;
+    // Claim values are percentages; the raw float (8.868501529051978)
+    // is an internal artifact, so round to the one decimal the claim
+    // text itself uses. Derivations drop their "from facts …" suffix:
+    // the internal fact IDs are not something a reader can use.
+    const value = Number.isFinite(row.value) ? String(Math.round(row.value * 10) / 10) : "—";
+    const derivation = String(row.derivation || "").replace(/, from facts.*$/, "");
+    return `<tr><td>${esc(row.claim)}</td><td>${value}</td><td>${esc(derivation)}</td></tr>`;
   }).join("");
-  $("b-drivers").innerHTML = (b.drivers || []).map((d) => `<li>${esc(d)}</li>`).join("");
-  $("b-reaction").textContent = b.market_reaction || "No price-reaction claim in this briefing.";
-  $("b-watch").innerHTML = (b.guidance_and_watch || []).map((w) => `<li>${esc(w)}</li>`).join("");
+  const drivers = b.drivers || [];
+  show($("h-drivers"), drivers.length > 0);
+  show($("b-drivers"), drivers.length > 0);
+  $("b-drivers").innerHTML = drivers.map((d) => `<li>${esc(d)}</li>`).join("");
+  $("b-reaction").textContent = b.market_reaction
+    || "Not available in the cloud briefing — the Workers don't bundle a price feed, so this briefing covers filings, consensus, and the call only.";
+  // The Analyst copies pack.missing into risks, so tool notes (the
+  // absent price feed, in the cloud build) arrive inside
+  // guidance_and_watch. They are honest data notes, not guidance,
+  // so show them under their own heading instead of hiding them.
+  const isNote = (w) => /No module named|failed:/.test(w);
+  const watch = (b.guidance_and_watch || []).filter((w) => !isNote(w));
+  const notes = (b.guidance_and_watch || []).filter(isNote);
+  show($("h-watch"), watch.length > 0);
+  show($("b-watch"), watch.length > 0);
+  $("b-watch").innerHTML = watch.map((w) => `<li>${esc(w)}</li>`).join("");
+  show($("sec-notes"), notes.length > 0);
+  $("b-notes").innerHTML = notes.map((w) => `<li>${esc(w)}</li>`).join("");
   $("b-story").innerHTML = String(b.story || "").split(/\n\n+/).map((p) => `<p>${esc(p)}</p>`).join("");
   $("b-model").textContent = b.story_model || "—";
   $("b-sources").innerHTML = (b.sources || []).map((s) => {
