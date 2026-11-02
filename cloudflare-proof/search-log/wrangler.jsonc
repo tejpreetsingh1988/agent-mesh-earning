@@ -1,0 +1,1 @@
+{"$schema":"node_modules/wrangler/config-schema.json","compatibility_date":"2026-11-02","d1_databases":[{"binding":"DB","database_id":"5736d0f6-8cd1-4011-846c-043c6ea8d9ab","database_name":"agent-mesh-briefings"}],"main":"src/index.ts","name":"mesh-search-log-proof","observability":{"enabled":true}}
