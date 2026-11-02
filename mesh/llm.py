@@ -68,10 +68,14 @@ MODELS = [PRIMARY] + [m for m in FALLBACK_MODELS if m and m != PRIMARY]
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 _MONEY_PCT_RE = re.compile(
-    r"\$[\d,]+(?:\.\d+)?\s*(?:billion|million|B|M)?|[\d,]+(?:\.\d+)?\s*%|[\d,]+(?:\.\d+)?\s*(?:billion|million)\b",
+    r"\$[\d,]+(?:\.\d+)?\s*(?:trillion|billion|million|B|M)?|[\d,]+(?:\.\d+)?\s*%|[\d,]+(?:\.\d+)?\s*(?:trillion|billion|million)\b",
     re.I)
 _NUM_RE = re.compile(r"[\d,]+(?:\.\d+)?")
 _QUOTE_RE = re.compile(r'"([^"]{10,})"')
+# Notes that describe a tool failure rather than a business risk
+# (a missing module, a failed fetch). The Pages frontend
+# partitions these into Data notes with the same pattern.
+_TOOL_NOTE_RE = re.compile(r"No module named|failed:")
 _FORBIDDEN = ("price target", "buy rating", "sell rating", "recommend buying",
               "recommend selling", "we recommend a buy", "we recommend a sell")
 
@@ -175,8 +179,16 @@ def deterministic_story(pack, analysis) -> str:
     elif isinstance(tr, dict) and tr.get("status") != "available":
         parts.append("No earnings-call transcript was available for this quarter, so this story "
                      "is drawn only from the verified claims above.")
-    if analysis.risks_and_watch:
-        parts.append("What to watch: " + "; ".join(r.rstrip(".") for r in analysis.risks_and_watch) + ".")
+    # Tool-error notes are honest data notes — the frontend shows
+    # them under Data notes — but they are not "what to watch"
+    # prose, and printing them inside the story made the fallback
+    # read like an error log (AMZN, Nov 2, 2026). Filter them
+    # here; if nothing but tool notes remains, the paragraph is
+    # dropped, not printed empty.
+    watch = [r for r in analysis.risks_and_watch
+             if not _TOOL_NOTE_RE.search(r)]
+    if watch:
+        parts.append("What to watch: " + "; ".join(r.rstrip(".") for r in watch) + ".")
     return "\n\n".join(parts)
 
 
