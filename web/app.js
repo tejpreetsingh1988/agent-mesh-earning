@@ -36,7 +36,10 @@ function esc(s) {
 function show(el, on) { if (el) el.hidden = !on; }
 
 function prettyMetric(m) {
-  return String(m || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return String(m || "").replace(/_/g, " ").replace(/\b\w+/g, (w) => {
+    const up = w.toUpperCase();
+    return up === "GAAP" || up === "EPS" ? up : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+  });
 }
 
 function round1(v) {
@@ -46,6 +49,103 @@ function round1(v) {
 function secs(ms) {
   if (!Number.isFinite(ms)) return "";
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+// ---- Pivot tables (Scout) and claim blocks (Analyst) ----
+// Quarters become columns, one table per metric: a Revenue
+// table, an EPS table, and so on — the long one-row-per-fact
+// list is unreadable once a ticker has eight quarters of
+// history. Nothing is computed here: every value shown is a
+// streamed fact, rounded to one decimal exactly as before.
+// Derived fiscal-Q4 rows (fiscal-year total minus 9-month
+// year-to-date) carry a † and a footnote; the growth math
+// stays with the Analyst, so the Scout table never shows a
+// second, possibly disagreeing, growth figure.
+function quarterLabel(period) {
+  const m = /^(\d{4})-(\d{2})/.exec(String(period || ""));
+  if (!m) return String(period || "");
+  return `Q${Math.floor((Number(m[2]) - 1) / 3) + 1} ${m[1]}`;
+}
+
+function pivotFacts(facts) {
+  const order = ["total_revenue", "operating_income", "gaap_eps"];
+  const groups = new Map();
+  for (const f of facts || []) {
+    const metric = f.metric || "unknown";
+    if (!groups.has(metric)) groups.set(metric, { metric, unit: f.unit || "", byPeriod: new Map() });
+    const g = groups.get(metric);
+    const period = f.period || "";
+    if (!g.byPeriod.has(period)) {
+      g.byPeriod.set(period, {
+        value: f.value, unit: f.unit || "",
+        derived: String(f.id || "").endsWith("_derived"),
+      });
+    }
+  }
+  const list = [...groups.values()].map((g) => {
+    const periods = [...g.byPeriod.keys()].sort();
+    return { metric: g.metric, unit: g.unit, periods, cells: periods.map((p) => g.byPeriod.get(p)) };
+  });
+  list.sort((a, b) => {
+    const ia = order.indexOf(a.metric), ib = order.indexOf(b.metric);
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || (a.metric < b.metric ? -1 : 1);
+  });
+  return list;
+}
+
+function metricClass(metric) {
+  return metric === "total_revenue" ? "metric-revenue"
+    : metric === "operating_income" ? "metric-opinc"
+    : /eps/i.test(metric || "") ? "metric-eps" : "metric-other";
+}
+
+function pivotTablesHtml(facts) {
+  const tables = pivotFacts(facts);
+  if (!tables.length) return `<p class="agent-waiting">No facts returned.</p>`;
+  const anyDerived = tables.some((t) => t.cells.some((c) => c.derived));
+  const html = tables.map((t) => {
+    const latest = t.periods.length - 1;
+    const head = t.periods.map((p, i) =>
+      `<th class="num${i === latest ? " latest-col" : ""}">${esc(quarterLabel(p))}</th>`).join("");
+    const row = t.cells.map((c, i) => {
+      const val = Number.isFinite(c.value) ? round1(c.value) : "—";
+      const derived = c.derived
+        ? '<sup title="Derived: fiscal-year total minus 9-month year-to-date">†</sup>' : "";
+      const title = `${quarterLabel(t.periods[i])} · ${Number.isFinite(c.value) ? c.value : "—"} ${esc(c.unit)}${c.derived ? " · derived" : ""}`;
+      return `<td class="num${i === latest ? " latest-col" : ""}" title="${esc(title)}">${val}${derived}</td>`;
+    }).join("");
+    return `<details class="metric-table ${metricClass(t.metric)}" open>`
+      + `<summary class="metric-head"><span class="metric-dot"></span><strong>${esc(prettyMetric(t.metric))}</strong>`
+      + `<span class="metric-unit">${esc(t.unit)}</span></summary>`
+      + `<div class="table-wrap"><table><thead><tr><th class="metric-col-head">Value</th>${head}</tr></thead>`
+      + `<tbody><tr><td class="metric-row-label">Value</td>${row}</tr></tbody></table></div></details>`;
+  }).join("");
+  const foot = anyDerived
+    ? `<p class="metric-footnote">† Derived: fiscal-year total minus 9-month year-to-date. `
+      + `Hover any value for its exact figure. Click a metric heading to collapse its table.</p>`
+    : `<p class="metric-footnote">Hover any value for its exact figure. `
+      + `Click a metric heading to collapse its table.</p>`;
+  return html + foot;
+}
+
+function claimKind(text) {
+  const t = String(text || "");
+  if (/margin/i.test(t)) return "claim-margin";
+  if (/eps|consensus|beat|miss/i.test(t)) return "claim-eps";
+  if (/growth|yoy|qoq|year over year|quarter over quarter/i.test(t)) return "claim-growth";
+  if (/price|reaction|share/i.test(t)) return "claim-price";
+  return "claim-other";
+}
+
+function claimBlocksHtml(claims) {
+  return (claims || []).map((c) => {
+    const text = c.text || "";
+    const pct = /%|percent|growth|margin|beat|miss|reaction/i.test(text) ? "%" : "";
+    const value = Number.isFinite(c.value) ? round1(c.value) + pct : "—";
+    return `<div class="claim ${claimKind(text)}"><div class="claim-top"><span class="claim-text">${esc(text)}</span>`
+      + `<span class="claim-value">${value}</span></div>`
+      + (c.derivation ? `<div class="claim-derivation">${esc(c.derivation)}</div>` : "") + `</div>`;
+  }).join("");
 }
 
 function storyHtml(text) {
@@ -142,16 +242,12 @@ function onStreamEvent(ev, ticker) {
   }
   if (name === "scout_done") {
     const facts = ev.fact_list || [];
-    const rows = facts.map((f) => {
-      const src = (f.source && f.source.publisher) || "Source";
-      return `<tr><td>${esc(prettyMetric(f.metric))}</td><td class="num">${round1(f.value)}</td>`
-        + `<td>${esc(f.unit || "")}</td><td>${esc(f.period || "")}</td><td>${esc(src)}</td></tr>`;
-    }).join("");
+    const publishers = [...new Set(facts.map((f) => (f.source && f.source.publisher) || "").filter(Boolean))];
     setBody("scout",
       `<p class="agent-filing">${esc(ev.company_name || ticker)} — ${esc(ev.quarter_label || "")} — `
       + `${esc(ev.status || "")} · Transcript: ${esc(ev.transcript_status || "unknown")}</p>`
-      + `<div class="table-wrap"><table><thead><tr><th>Fact</th><th class="num">Value</th>`
-      + `<th>Unit</th><th>Period</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table></div>`);
+      + pivotTablesHtml(facts)
+      + (publishers.length ? `<p class="metric-footnote">Sources: ${esc(publishers.join(", "))}.</p>` : ""));
     setStatus("scout", "done", ev.duration_ms ? `took ${secs(ev.duration_ms)}` : "");
     setConductor("Conductor — Pipeline Lead", "Scout done. Analyst is computing.");
     setStatus("analyst", "working", "");
@@ -161,13 +257,9 @@ function onStreamEvent(ev, ticker) {
   if (name === "analyst_done") {
     analystRuns += 1;
     const claims = ev.claim_list || [];
-    const rows = claims.map((c) => `<tr><td>${esc(c.text || "")}</td>`
-      + `<td class="num">${round1(c.value)}</td><td>${esc(c.derivation || "")}</td></tr>`).join("");
     const note = analystRuns > 1
       ? `<p class="agent-note">Revised after Critic feedback.</p>` : "";
-    setBody("analyst", note
-      + `<div class="table-wrap"><table><thead><tr><th>Claim</th><th class="num">Value</th>`
-      + `<th>Derivation</th></tr></thead><tbody>${rows}</tbody></table></div>`);
+    setBody("analyst", note + claimBlocksHtml(claims));
     setStatus("analyst", "done", ev.duration_ms ? `took ${secs(ev.duration_ms)}` : "");
     setConductor("Conductor — Pipeline Lead", "Analyst done. Critic is re-checking.");
     setStatus("critic", "working", "");
@@ -362,15 +454,16 @@ function render(b) {
   $("b-ticker").textContent = b.ticker;
   $("b-quarter").textContent = b.quarter_label;
   $("b-verdict").textContent = b.verdict;
-  $("b-table").innerHTML = (b.table || []).map((row) => {
-    // Claim values are percentages; the raw float (8.868501529051978)
-    // is an internal artifact, so round to the one decimal the claim
-    // text itself uses. Derivations drop their "from facts …" suffix:
-    // the internal fact IDs are not something a reader can use.
-    const value = Number.isFinite(row.value) ? String(Math.round(row.value * 10) / 10) : "—";
-    const derivation = String(row.derivation || "").replace(/, from facts.*$/, "");
-    return `<tr><td>${esc(row.claim)}</td><td class="num">${value}</td><td>${esc(derivation)}</td></tr>`;
-  }).join("");
+  // Claim values are percentages; the raw float (8.868501529051978)
+  // is an internal artifact, so round to the one decimal the claim
+  // text itself uses. Derivations drop their "from facts …" suffix:
+  // the internal fact IDs are not something a reader can use.
+  // Same claim blocks as the Analyst card, so the record matches
+  // what the card showed.
+  $("b-table").innerHTML = claimBlocksHtml((b.table || []).map((row) => ({
+    text: row.claim, value: row.value,
+    derivation: String(row.derivation || "").replace(/, from facts.*$/, ""),
+  })));
   const drivers = b.drivers || [];
   show($("sec-drivers"), drivers.length > 0);
   $("b-drivers").innerHTML = drivers.map((d) => `<li>${esc(d)}</li>`).join("");

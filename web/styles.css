@@ -375,3 +375,40 @@ footer a { color: var(--foreground); text-underline-offset: 4px; }
 .search-results[hidden] { display: none; }
 .search-match { cursor: pointer; }
 .search-empty { font-size: 13px; color: var(--muted-foreground); margin: 0; }
+
+/* ---- Pivot metric tables (Scout card) ---- */
+.metric-table { margin: 0 0 20px; }
+.metric-table:last-child { margin-bottom: 0; }
+.metric-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer; list-style: none; }
+.metric-head::-webkit-details-marker { display: none; }
+.metric-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--metric, #71717a); flex: none; }
+.metric-unit { font-size: 12px; color: var(--muted-foreground); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
+.metric-revenue { --metric: #047857; }
+.metric-opinc { --metric: #1d4ed8; }
+.metric-eps { --metric: #6d28d9; }
+.metric-other { --metric: #71717a; }
+.metric-table th.latest-col, .metric-table td.latest-col {
+  background: color-mix(in srgb, var(--metric, #71717a) 9%, transparent);
+}
+.metric-table td.latest-col { font-weight: 700; }
+.metric-table tbody tr:hover td { background: var(--muted); }
+.metric-table tbody tr:hover td.latest-col {
+  background: color-mix(in srgb, var(--metric, #71717a) 16%, transparent);
+}
+.metric-col-head { font-size: 12px; color: var(--muted-foreground); white-space: nowrap; }
+.metric-row-label { font-size: 12px; color: var(--muted-foreground); white-space: nowrap; }
+.metric-footnote { font-size: 12px; color: var(--muted-foreground); margin: 8px 0 0; }
+
+/* ---- Claim blocks (Analyst card + briefing record) ---- */
+.claim { border: 1px solid var(--border); border-left: 4px solid var(--claim, #71717a); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; transition: background 0.15s; }
+.claim:hover { background: var(--muted); }
+.claim:last-child { margin-bottom: 0; }
+.claim-growth { --claim: #1d4ed8; }
+.claim-margin { --claim: #6d28d9; }
+.claim-eps { --claim: #b45309; }
+.claim-price { --claim: #0f766e; }
+.claim-other { --claim: #71717a; }
+.claim-top { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.claim-text { font-weight: 500; font-size: 14px; }
+.claim-value { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; background: var(--claim); color: #fff; border-radius: 999px; padding: 2px 10px; font-size: 13px; }
+.claim-derivation { font-size: 13px; color: var(--muted-foreground); margin-top: 6px; }
