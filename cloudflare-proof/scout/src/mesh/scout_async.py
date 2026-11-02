@@ -12,7 +12,17 @@ so a future edit to scout.py is checked against this file too.
 Sync collect_evidence stays untouched for Docker, the eval
 harness and the Streamlit path. This module is imported only
 by the Cloudflare Scout Worker proof and by tests.
+
+SPEED: independent fetches run concurrently with asyncio.gather
+(Phase A: company facts + latest filing; Phase B: the six
+calls that only need the filing anchor). Results are processed
+in the original step order, so the missing[] notes keep their
+old order even though the calls overlap. gather uses
+return_exceptions=True so one failing call cannot cancel the
+others — each result is then handled with exactly the same
+checks and notes the sequential code used.
 """
+import asyncio
 import calendar  # noqa: F401  (kept for parity with scout.py's imports)
 from datetime import date, datetime, timezone
 
@@ -30,14 +40,21 @@ async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> Ev
     t = ticker.strip().upper()
     missing: list[str] = []
 
-    # 1. Company + latest earnings filing (the anchor for everything else).
-    try:
-        facts = await mcp_call("filings", "get_company_facts", {"ticker": t})
-    except Exception as e:
+    # 1. Company + latest earnings filing (the anchor for everything
+    # else) — fetched concurrently; the checks below run in the
+    # old order, so the NOT_REPORTED_YET outcomes are unchanged.
+    # (One behavioural difference: if company facts fail, the
+    # filing call has already been made too — one extra read-only
+    # EDGAR request on an error path, never on the success path.)
+    facts, filing = await asyncio.gather(
+        mcp_call("filings", "get_company_facts", {"ticker": t}),
+        mcp_call("filings", "get_latest_earnings_filing", {"ticker": t}),
+        return_exceptions=True)
+    if isinstance(facts, Exception):
         return EvidencePack(
             ticker=t, company_name=t, quarter_label="", quarter_end=date(1970, 1, 1),
             report_date=_now(), status="NOT_REPORTED_YET",
-            missing=[f"filings-mcp get_company_facts failed: {e}"],
+            missing=[f"filings-mcp get_company_facts failed: {facts}"],
         )
     if not isinstance(facts, dict) or "error" in facts:
         return EvidencePack(
@@ -47,13 +64,11 @@ async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> Ev
         )
     company_name = facts.get("company_name") or t
 
-    try:
-        filing = await mcp_call("filings", "get_latest_earnings_filing", {"ticker": t})
-    except Exception as e:
+    if isinstance(filing, Exception):
         return EvidencePack(
             ticker=t, company_name=company_name, quarter_label="", quarter_end=date(1970, 1, 1),
             report_date=_now(), status="NOT_REPORTED_YET",
-            missing=[f"filings-mcp get_latest_earnings_filing failed: {e}"],
+            missing=[f"filings-mcp get_latest_earnings_filing failed: {filing}"],
         )
     if not isinstance(filing, dict) or "error" in filing or not filing.get("filingDate"):
         return EvidencePack(
@@ -67,9 +82,27 @@ async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> Ev
     except ValueError:
         report_date = _now()
 
+    # Phase B: every call that only needs the filing anchor,
+    # fetched concurrently, then processed in the original step
+    # order (recent filings, filing text, history, EDGAR overlay,
+    # price, consensus) so missing[] keeps its old order.
+    (recent, _filing_text, hist, filing_facts,
+     price_raw, consensus_raw) = await asyncio.gather(
+        mcp_call("filings", "list_recent_filings", {"ticker": t, "limit": 10}),
+        mcp_call("filings", "get_filing_text", {
+            "ticker": t, "accession": filing.get("accessionNumber"),
+            "primary_document": filing.get("primaryDocument"), "max_chars": 12000}),
+        mcp_call("market", "get_quarterly_history", {"ticker": t, "quarters": 8}),
+        mcp_call("filings", "get_filing_facts", {"ticker": t}),
+        mcp_call("market", "get_price_reaction", {"ticker": t, "report_date": report_date_str}),
+        mcp_call("estimates_news", "get_consensus_estimates",
+                 {"ticker": t, "quarter": "", "report_date": report_date_str}),
+        return_exceptions=True)
+
     submissions_report_date = ""
     try:
-        recent = await mcp_call("filings", "list_recent_filings", {"ticker": t, "limit": 10})
+        if isinstance(recent, Exception):
+            raise recent
         for f in (recent.get("filings") or []):
             if f.get("accessionNumber") == filing.get("accessionNumber") and f.get("reportDate"):
                 submissions_report_date = f["reportDate"]
@@ -77,17 +110,19 @@ async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> Ev
     except Exception as e:
         missing.append(f"list_recent_filings failed: {e}")
 
+    # The filing text result is intentionally discarded — only
+    # its failure is recorded, as before.
     try:
-        await mcp_call("filings", "get_filing_text", {
-            "ticker": t, "accession": filing.get("accessionNumber"),
-            "primary_document": filing.get("primaryDocument"), "max_chars": 12000})
+        if isinstance(_filing_text, Exception):
+            raise _filing_text
     except Exception as e:
         missing.append(f"get_filing_text failed: {e}")
 
     # 2. Quarterly history (yfinance, unofficial) -> revenue / opinc facts.
     facts_list: list[Fact] = []
     try:
-        hist = await mcp_call("market", "get_quarterly_history", {"ticker": t, "quarters": 8})
+        if isinstance(hist, Exception):
+            raise hist
         for q in (hist.get("quarters") or []):
             period = q.get("period_end", "")
             src = SourceRef(url="", publisher="yfinance quarterly_financials (unofficial)",
@@ -107,7 +142,8 @@ async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> Ev
 
     # 2b. Filing-verified facts (SEC EDGAR XBRL) overlay yfinance.
     try:
-        filing_facts = await mcp_call("filings", "get_filing_facts", {"ticker": t})
+        if isinstance(filing_facts, Exception):
+            raise filing_facts
         if isinstance(filing_facts, dict) and not filing_facts.get("error"):
             by_key = {(f.metric, f.period): f for f in facts_list}
             for ff in (filing_facts.get("facts") or []):
@@ -133,7 +169,9 @@ async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> Ev
     # 3. Price reaction (regular-session closes only).
     price_reaction = None
     try:
-        price_reaction = await mcp_call("market", "get_price_reaction", {"ticker": t, "report_date": report_date_str})
+        if isinstance(price_raw, Exception):
+            raise price_raw
+        price_reaction = price_raw
         if not isinstance(price_reaction, dict) or "error" in price_reaction:
             missing.append(f"get_price_reaction returned an error: {price_reaction}")
             price_reaction = None
@@ -143,8 +181,9 @@ async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> Ev
     # 4. Consensus (Nasdaq -> Alpha Vantage -> range -> unavailable / forecast_only).
     consensus = None
     try:
-        consensus = await mcp_call("estimates_news", "get_consensus_estimates",
-                                   {"ticker": t, "quarter": "", "report_date": report_date_str})
+        if isinstance(consensus_raw, Exception):
+            raise consensus_raw
+        consensus = consensus_raw
         if not isinstance(consensus, dict) or consensus.get("status") not in ("available", "available_range", "forecast_only"):
             missing.append(f"Consensus unavailable for {t}: {consensus.get('reason') if isinstance(consensus, dict) else consensus}")
             consensus = consensus if isinstance(consensus, dict) else None
