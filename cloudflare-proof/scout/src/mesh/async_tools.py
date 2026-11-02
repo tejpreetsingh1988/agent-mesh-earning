@@ -37,6 +37,7 @@ from .edgar_facts import (
     USER_AGENT as EDGAR_FACTS_UA,
     derive_q4_rows,
     parse_concept_rows,
+    pick_latest_tag,
 )
 from .transcript import (
     UA as TRANSCRIPT_UA,
@@ -157,32 +158,37 @@ async def _fetch_concept(cik: int, tag: str) -> dict:
 
 
 async def async_get_quarterly_facts(cik: int, limit: int = 8) -> dict:
-    """Async mirror of edgar_facts.get_quarterly_facts."""
+    """Async mirror of edgar_facts.get_quarterly_facts, with the
+    same recency-aware tag pick (see pick_latest_tag). Tag
+    fetches run concurrently: a ticker can need up to 10 concept
+    payloads, and fetching them one by one was the slowest part
+    of the Scout Worker. gather preserves tag order, so the
+    tie-break (earlier-priority tag stands) still holds."""
     result: dict = {}
     missing: list[str] = []
     for metric, tags in ALTERNATE_TAGS.items():
-        found = None
-        tried = []
-        for tag in tags:
-            tried.append(tag)
+        async def _one(tag):
             try:
                 payload = await _fetch_concept(cik, tag)
                 rows = parse_concept_rows(payload, metric)
             except Exception:
-                continue
-            if rows:
-                rows = list(rows)
-                seen = {r["period_end"] for r in rows}
-                for derived in derive_q4_rows(payload, metric):
-                    if derived["period_end"] not in seen:
-                        rows.append(derived)
-                rows.sort(key=lambda r: r["period_end"] or "", reverse=True)
-                found = {"tag": tag, "rows": rows[:limit]}
-                break
-        if found:
-            result[metric] = found
+                return (tag, [])
+            if not rows:
+                return (tag, [])
+            rows = list(rows)
+            seen = {r["period_end"] for r in rows}
+            for derived in derive_q4_rows(payload, metric):
+                if derived["period_end"] not in seen:
+                    rows.append(derived)
+            rows.sort(key=lambda r: r["period_end"] or "", reverse=True)
+            return (tag, rows)
+        candidates = await asyncio.gather(*[_one(tag) for tag in tags])
+        picked = pick_latest_tag(candidates)
+        if picked:
+            tag, rows = picked
+            result[metric] = {"tag": tag, "rows": rows[:limit]}
         else:
-            missing.append(f"No quarterly-duration 10-Q row for {metric} (tried: {', '.join(tried)})")
+            missing.append(f"No quarterly-duration 10-Q row for {metric} (tried: {', '.join(tags)})")
     result["missing"] = missing
     return result
 

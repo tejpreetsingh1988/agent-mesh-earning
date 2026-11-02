@@ -7,8 +7,15 @@ single XBRL tag does NOT repeat across companies, and a naive
 1. Alternate tags. AMZN and MA have no `Revenues` tag; LLY and JPM
    have no `OperatingIncomeLoss`; BRK and MA have no
    `EarningsPerShareDiluted`. Each company files under a different
-   tag for the same concept, so this module tries a tag list in
-   order and records which tag actually produced the fact.
+   tag for the same concept, so this module tries a tag list and
+   records which tag actually produced the fact. The tag is
+   chosen by recency, not by list order: the first tag with any
+   rows is WRONG when a retired tag still has old rows — MSFT's
+   `Revenues` tag has quarterly rows from 2009–2010, so it used
+   to beat the current
+   `RevenueFromContractWithCustomerExcludingAssessedTax` tag
+   that was never even tried, and a briefing labelled Q3 2026
+   carried 2010 revenue (see pick_latest_tag).
 2. Year-to-date rows. A 10-Q can carry a 6- or 9-month cumulative
    value (NVDA `Revenues` $96.2B was 6 months, not a quarter).
    A quarterly fact must come from a row whose start-to-end
@@ -214,10 +221,35 @@ def get_filing_facts_for_ticker(ticker: str) -> dict:
             "cik": facts["cik"], "facts": out, "missing": quarterly["missing"]}
 
 
+def pick_latest_tag(candidates):
+    """Pick the tag whose rows reach the most recent quarter.
+
+    candidates: iterable of (tag, rows) in priority order, rows
+    newest-first (as parse_concept_rows returns). Recency wins:
+    a tag whose latest period is strictly later displaces the
+    current best; on a tie the earlier-priority tag stands.
+    Returns (tag, rows) or None when no candidate has rows.
+
+    This is the MSFT fix: `Revenues` rows end in 2010 while the
+    current contract-revenue tag reaches 2026, so recency — not
+    list order — must decide, or a current-quarter briefing
+    inherits decade-old facts.
+    """
+    best = None
+    for tag, rows in candidates:
+        if not rows:
+            continue
+        latest = rows[0].get("period_end") or ""
+        if best is None or latest > best[1]:
+            best = (tag, latest, rows)
+    return (best[0], best[2]) if best else None
+
+
 def get_quarterly_facts(cik: int, fetch=fetch_concept, limit: int = 8) -> dict:
-    """Try each alternate tag per metric, in order, until one
-    yields quarterly rows. Returns {metric: {tag, rows}} plus a
-    `missing` list for metrics with no quarterly row at all.
+    """Try every alternate tag per metric and keep the one whose
+    rows reach the most recent quarter (see pick_latest_tag).
+    Returns {metric: {tag, rows}} plus a `missing` list for
+    metrics with no quarterly row at all.
 
     `fetch` is injectable so tests (and the eval harness) can
     pass a fake that returns fixture payloads instead of hitting
@@ -227,27 +259,27 @@ def get_quarterly_facts(cik: int, fetch=fetch_concept, limit: int = 8) -> dict:
     result: dict = {}
     missing: list[str] = []
     for metric, tags in ALTERNATE_TAGS.items():
-        found = None
-        tried = []
+        candidates = []
         for tag in tags:
-            tried.append(tag)
             try:
                 payload = fetch(cik, tag)
                 rows = parse_concept_rows(payload, metric)
             except Exception:
                 continue
-            if rows:
-                rows = list(rows)
-                seen = {r["period_end"] for r in rows}
-                for derived in derive_q4_rows(payload, metric):
-                    if derived["period_end"] not in seen:
-                        rows.append(derived)
-                rows.sort(key=lambda r: r["period_end"] or "", reverse=True)
-                found = {"tag": tag, "rows": rows[:limit]}
-                break
-        if found:
-            result[metric] = found
+            if not rows:
+                continue
+            rows = list(rows)
+            seen = {r["period_end"] for r in rows}
+            for derived in derive_q4_rows(payload, metric):
+                if derived["period_end"] not in seen:
+                    rows.append(derived)
+            rows.sort(key=lambda r: r["period_end"] or "", reverse=True)
+            candidates.append((tag, rows))
+        picked = pick_latest_tag(candidates)
+        if picked:
+            tag, rows = picked
+            result[metric] = {"tag": tag, "rows": rows[:limit]}
         else:
-            missing.append(f"No quarterly-duration 10-Q row for {metric} (tried: {', '.join(tried)})")
+            missing.append(f"No quarterly-duration 10-Q row for {metric} (tried: {', '.join(tags)})")
     result["missing"] = missing
     return result
