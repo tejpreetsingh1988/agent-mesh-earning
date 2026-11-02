@@ -782,6 +782,19 @@ function render(b) {
 // matches are shown, the user picks. If the shape ever
 // changes, this parser is the one place to fix.
 const SEARCH_URL = "https://ns-cc6b2129-061a-495e-bfa6-d2a47919f37a.search.ai.cloudflare.com/search";
+const LOG_URL = "https://mesh-search-log-proof.tejpreetsingh1988.workers.dev";
+
+// Fire-and-forget: saving a search must never break or slow a search.
+// Rows store only the query text, the picked ticker, and a timestamp.
+function logSearch(query, ticker) {
+  try {
+    fetch(LOG_URL + "/log", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, ticker: ticker || null }),
+    }).catch(() => {});
+  } catch { /* logging never breaks search */ }
+}
 const searchCache = new Map();
 let searching = false;
 
@@ -828,6 +841,7 @@ function renderSearchResults(matches, query) {
     box.querySelectorAll(".search-match").forEach((btn) => {
       btn.addEventListener("click", () => {
         show(box, false);
+        logSearch(query, btn.dataset.ticker);
         getBriefing(btn.dataset.ticker);
       });
     });
@@ -839,6 +853,7 @@ async function searchCompanies() {
   const query = $("company-search").value.trim();
   const box = $("company-results");
   if (!query || searching) return;
+  logSearch(query, null);
   if (searchCache.has(query)) {
     renderSearchResults(searchCache.get(query), query);
     return;
