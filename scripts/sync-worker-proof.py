@@ -1,4 +1,5 @@
-"""Regenerate cloudflare-proof/{analyst,scout}/src from the repo's mesh/ modules.
+"""Regenerate cloudflare-proof/{analyst,scout,critic,writer,orchestrator}/src
+from the repo's mesh/ modules.
 
 Each Worker project must be self-contained (its root is what pywrangler
 bundles), so it vendors the modules it needs. Repo root mesh/ is the
@@ -49,6 +50,50 @@ def _analyst() -> None:
           base + ENTRYPOINT)
 
 
+def _critic() -> None:
+    base = (ROOT / "agents" / "critic" / "main.py").read_text()
+    base = base.replace("from mesh.mcp_client import make_client",
+                        "from mesh.async_tools import async_direct_call")
+    base = base.replace("from mesh.critic import critique",
+                        "from mesh.critic_async import critique_async")
+    base = base.replace("def _handler(payload: dict) -> dict:",
+                        "async def _handler(payload: dict) -> dict:")
+    base = base.replace("return critique(pack, analysis, mcp_call=make_client()).model_dump(mode=\"json\")",
+                        "return (await critique_async(pack, analysis, mcp_call=async_direct_call)).model_dump(mode=\"json\")")
+    base = base.replace('app = create_app("critic", handler=_handler)',
+                        'app = create_app("critic", async_handler=_handler)')
+    _sync("critic",
+          ["__init__.py", "schemas.py", "analyst.py", "critic.py", "critic_async.py",
+           "agent_app.py", "cards.py", "auth.py",
+           "edgar.py", "edgar_facts.py", "consensus.py", "news.py", "transcript.py",
+           "market.py", "worker_http.py", "async_tools.py"],
+          base + ENTRYPOINT)
+
+
+def _writer() -> None:
+    base = (ROOT / "agents" / "writer" / "main.py").read_text()
+    base = base.replace("from mesh.writer import write_briefing",
+                        "from mesh.story_async import build_story_async\nfrom mesh.writer import write_briefing")
+    base = base.replace("def _handler(payload: dict) -> dict:",
+                        "async def _handler(payload: dict) -> dict:")
+    base = base.replace("return write_briefing(pack, analysis, trace_id).model_dump(mode=\"json\")",
+                        "return write_briefing(pack, analysis, trace_id, story_result=await build_story_async(pack, analysis)).model_dump(mode=\"json\")")
+    base = base.replace('app = create_app("writer", handler=_handler)',
+                        'app = create_app("writer", async_handler=_handler)')
+    _sync("writer",
+          ["__init__.py", "schemas.py", "writer.py", "llm.py", "story_async.py",
+           "agent_app.py", "cards.py", "auth.py", "worker_http.py"],
+          base + ENTRYPOINT)
+
+
+def _orchestrator() -> None:
+    base = (ROOT / "apps" / "orchestrator" / "worker_main.py").read_text()
+    _sync("orchestrator",
+          ["__init__.py", "schemas.py", "orchestrator.py", "orchestrator_async.py",
+           "writer.py", "llm.py", "agent_app.py", "cards.py", "auth.py", "worker_http.py"],
+          base + ENTRYPOINT)
+
+
 def _scout() -> None:
     base = (ROOT / "agents" / "scout" / "main.py").read_text()
     base = base.replace("from mesh.mcp_client import make_client",
@@ -74,3 +119,6 @@ def _scout() -> None:
 if __name__ == "__main__":
     _analyst()
     _scout()
+    _critic()
+    _writer()
+    _orchestrator()
