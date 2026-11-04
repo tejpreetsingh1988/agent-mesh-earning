@@ -54,13 +54,23 @@ async def _agent_call(agent: str, payload: dict) -> dict:
     return body["result"]
 
 
+def _scout_payload(ticker: str, quarter: str = "") -> dict:
+    """Scout agent payload. A requested quarter ("Q2 2026") rides
+    along; empty means the most recent reported quarter."""
+    payload = {"ticker": ticker}
+    if quarter:
+        payload["quarter"] = quarter
+    return payload
+
+
 async def _handler(payload: dict) -> dict:
     ticker = payload.get("ticker") or payload.get("params", {}).get("ticker")
+    quarter = payload.get("quarter") or payload.get("params", {}).get("quarter", "")
     if not ticker:
         raise ValueError("Orchestrator task needs a ticker, e.g. {\"ticker\": \"GOOGL\"}")
     briefing = await run_briefing_async(
         ticker,
-        scout_fn=lambda t: _agent_call("scout", {"ticker": t}),
+        scout_fn=lambda t: _agent_call("scout", _scout_payload(t, quarter)),
         analyst_fn=lambda pack: _agent_call("analyst", {"evidence_pack": pack}),
         critic_fn=lambda pack, analysis: _agent_call("critic", {"evidence_pack": pack, "analysis": analysis}),
         writer_fn=lambda pack, analysis, trace_id: _agent_call("writer", {"evidence_pack": pack, "analysis": analysis, "trace_id": trace_id}),
@@ -72,7 +82,7 @@ app = create_app("orchestrator", async_handler=_handler, cors=True)
 
 
 @app.get("/tasks/stream")
-async def tasks_stream(ticker: str = ""):
+async def tasks_stream(ticker: str = "", quarter: str = ""):
     """SSE live log for one briefing. Same pipeline as POST
     /tasks/send, but each step is streamed as it happens so the
     frontend can show progress instead of a spinner. The queue
@@ -83,6 +93,7 @@ async def tasks_stream(ticker: str = ""):
     is an error event, not a 400, so the frontend's stream
     reader handles every outcome through one code path."""
     ticker = (ticker or "").strip().upper()
+    quarter = (quarter or "").strip()
     queue: asyncio.Queue = asyncio.Queue()
 
     async def _on_event(event: dict):
@@ -94,7 +105,7 @@ async def tasks_stream(ticker: str = ""):
                 raise ValueError('Orchestrator task needs a ticker, e.g. /tasks/stream?ticker=GOOGL')
             briefing = await run_briefing_async(
                 ticker,
-                scout_fn=lambda t: _agent_call("scout", {"ticker": t}),
+                scout_fn=lambda t: _agent_call("scout", _scout_payload(t, quarter)),
                 analyst_fn=lambda pack: _agent_call("analyst", {"evidence_pack": pack}),
                 critic_fn=lambda pack, analysis: _agent_call("critic", {"evidence_pack": pack, "analysis": analysis}),
                 writer_fn=lambda pack, analysis, trace_id: _agent_call("writer", {"evidence_pack": pack, "analysis": analysis, "trace_id": trace_id}),
