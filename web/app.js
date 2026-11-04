@@ -670,6 +670,12 @@ let currentTicker = "";
 async function getBriefing(ticker) {
   ticker = String(ticker || "").trim().toUpperCase();
   if (!ticker || running) return;
+  // Shareable link: the URL always names the briefing being run.
+  try {
+    const url = new URL(location.href);
+    url.searchParams.set("ticker", ticker);
+    history.replaceState(null, "", url);
+  } catch { /* URL sharing is best-effort */ }
   currentTicker = ticker;
   running = true;
   $("company-go").disabled = true;
@@ -895,6 +901,76 @@ $("company-go").addEventListener("click", searchCompanies);
 $("company-search").addEventListener("keydown", (e) => {
   if (e.key === "Enter") searchCompanies();
 });
+
+// Instant local suggestions: filter the company directory in the
+// browser as you type — zero AI Search calls, so the free query
+// pool is never burned by typing. Full AI search still runs on
+// Search click/Enter. Clicking an instant match logs and runs
+// its briefing exactly like an AI-search match.
+let directoryCache = null;
+async function loadDirectory() {
+  if (directoryCache) return directoryCache;
+  try {
+    const resp = await fetch("companies/companies.json");
+    directoryCache = await resp.json();
+  } catch { directoryCache = []; }
+  return directoryCache;
+}
+$("company-search").addEventListener("input", async (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  const box = $("company-results");
+  if (q.length < 2) { show(box, false); return; }
+  if (searching) return;
+  const dir = await loadDirectory();
+  // Guard against out-of-order resolves while the user keeps typing.
+  if ($("company-search").value.trim().toLowerCase() !== q) return;
+  const matches = dir.filter((c) =>
+    c.name.toLowerCase().includes(q) || c.ticker.toLowerCase().includes(q),
+  ).slice(0, 5);
+  if (!matches.length) { show(box, false); return; }
+  renderSearchResults(matches, e.target.value.trim());
+});
+
+// Recent searches strip: what other visitors searched for, from
+// the search log. Clicking a chip runs that search again (which
+// itself gets logged, like any search). Stays hidden when the
+// log is unreachable.
+async function renderRecentSearches() {
+  const wrap = $("recent-searches");
+  const chips = $("recent-chips");
+  if (!wrap || !chips) return;
+  try {
+    const resp = await fetch(LOG_URL + "/recent?limit=20");
+    if (!resp.ok) return;
+    const body = await resp.json();
+    const seen = new Set();
+    const items = (body.searches || []).filter((s) => {
+      if (!s.query || seen.has(s.query.toLowerCase())) return false;
+      seen.add(s.query.toLowerCase());
+      return true;
+    }).slice(0, 8);
+    if (!items.length) return;
+    chips.innerHTML = items.map((s) =>
+      `<button type="button" class="chip search-match" data-q="${esc(s.query)}">${esc(s.query)}${s.ticker ? ` (${esc(s.ticker)})` : ""}</button>`).join("");
+    chips.querySelectorAll(".search-match").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        $("company-search").value = btn.dataset.q;
+        searchCompanies();
+      });
+    });
+    show(wrap, true);
+  } catch { /* strip stays hidden when the log is unreachable */ }
+}
+renderRecentSearches();
+
+// Shareable briefing links: ?ticker=INTC runs that briefing on load.
+try {
+  const param = new URLSearchParams(location.search).get("ticker");
+  if (param && /^[A-Za-z]{1,10}$/.test(param.trim())) {
+    $("company-search").value = param.trim().toUpperCase();
+    getBriefing(param.trim().toUpperCase());
+  }
+} catch { /* a bad share link never breaks the page */ }
 
 // Loop legend + nodes: jump to that agent's card. Background last,
 // so a CDN failure can never block search or the briefing.

@@ -36,10 +36,15 @@
       <button id="company-go" type="button" class="btn-primary">Search</button>
     </div>
     <div id="company-results" class="search-results" hidden></div>
+    <div id="recent-searches" class="recent-searches" hidden>
+      <span class="label">Recent searches</span>
+      <span id="recent-chips"></span>
+    </div>
     <p class="hint">Search runs on Cloudflare AI Search over the
     <a href="companies/">company directory</a> — pick a match and its briefing runs.
     Typing a ticker works too, since each company page carries its ticker.
-    Only one search per click, so the free query pool is never burned by typing.</p>
+    As you type, instant matches from the directory appear — those cost no
+    queries, and only one AI search runs per Search click.</p>
   </section>
 
   <div class="layout">

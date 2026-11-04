@@ -261,3 +261,8 @@ table.analyst-table td.detail-cell { color: #3f3f46; font-size: 13px; }
 @media (prefers-reduced-motion: reduce) {
   .blob, .loop-dash, .loop-node.is-active circle, .agent-card[data-state="working"] .agent-dot { animation: none !important; }
 }
+
+/* Recent searches strip (Batch 1 UX): chips row under the search box. */
+.recent-searches { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.75rem; }
+.recent-searches .label { margin: 0; }
+#recent-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
