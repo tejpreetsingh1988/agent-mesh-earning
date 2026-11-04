@@ -257,7 +257,11 @@
       </section>
       <section class="card chart-card" id="chart-trend-card">
         <h3>Quarter trend</h3>
-        <p class="rail-hint">Revenue by quarter, from Scout facts. Hover for exact values.</p>
+        <p class="rail-hint">Quarterly totals from Scout facts. Hover for exact values.</p>
+        <div class="chart-switch" role="group" aria-label="Trend metric">
+          <button type="button" class="chart-switch-btn is-active" data-trend-metric="total_revenue">Revenue</button>
+          <button type="button" class="chart-switch-btn" data-trend-metric="operating_income">Operating income</button>
+        </div>
         <div class="chart-wrap"><canvas id="chart-trend" height="190"></canvas></div>
         <p class="chart-empty" id="chart-trend-empty">Run a briefing — this chart fills from its Scout facts.</p>
       </section>

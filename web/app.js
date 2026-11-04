@@ -294,20 +294,27 @@ function makeChart(id, type, labels, datasets, opts) {
   chartInstances[id] = chart;
   return chart;
 }
+// Trend chart metric (Batch 15): the switcher choice persists across
+// briefings — it is a viewing preference, not per-briefing state.
+// A briefing without the chosen series shows that metric's empty
+// note rather than silently falling back to revenue.
+let trendMetric = "total_revenue";
+
 function updateTrendChart() {
   const tables = pivotFacts(lastScoutFacts);
-  const rev = tables.find((t) => t.metric === "total_revenue");
-  if (!rev || !rev.periods.length) {
+  const table = tables.find((t) => t.metric === trendMetric);
+  const label = trendMetric === "operating_income" ? "Operating income" : "Revenue";
+  if (!table || !table.periods.length) {
     destroyChart("trend"); setChartEmpty("trend", true);
     const note = $("chart-trend-empty");
-    if (note) note.textContent = "No revenue series in this briefing's facts.";
+    if (note) note.textContent = `No ${label.toLowerCase()} series in this briefing's facts.`;
     setChartsVisible();
     return;
   }
-  const labels = rev.periods.map(quarterLabel);
-  const data = rev.cells.map((c) => Number.isFinite(c.value) ? c.value : null);
+  const labels = table.periods.map(quarterLabel);
+  const data = table.cells.map((c) => Number.isFinite(c.value) ? c.value : null);
   setChartEmpty("trend", false);
-  makeChart("trend", "bar", labels, [{ label: `Revenue (${rev.unit || ""})`.trim(), data,
+  makeChart("trend", "bar", labels, [{ label: `${label} (${table.unit || ""})`.trim(), data,
     backgroundColor: labels.map((_, i) => i === labels.length - 1 ? "#1d4ed8" : "#93c5fd"),
     borderRadius: 6 }]);
   setChartsVisible();
@@ -1491,6 +1498,19 @@ if (shareBtn) shareBtn.addEventListener("click", async () => {
   const orig = shareBtn.textContent;
   shareBtn.textContent = "Link copied";
   setTimeout(() => { shareBtn.textContent = orig; }, 2000);
+});
+
+// Trend metric switcher (Batch 15): re-renders only the trend
+// chart from the facts already held — no new pipeline call.
+document.querySelectorAll("[data-trend-metric]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const m = btn.dataset.trendMetric;
+    if (!m || m === trendMetric) return;
+    trendMetric = m;
+    document.querySelectorAll("[data-trend-metric]").forEach((b) =>
+      b.classList.toggle("is-active", b === btn));
+    if (lastScoutFacts.length) updateTrendChart();
+  });
 });
 
 // Recent searches strip: what other visitors searched for, from
