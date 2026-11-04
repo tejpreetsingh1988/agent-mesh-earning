@@ -343,7 +343,7 @@ function updateEpsAndMarginCharts() {
   const parsed = (lastAnalystClaims || []).map(parseClaim);
   const epsClaim = parsed.find((p) => /consensus/i.test(p.metric));
   if (epsClaim) {
-    const m = epsClaim.detail.match(/([\d.]+)\s*vs\s*([\d.]+)/);
+    const m = epsClaim.detail.match(/\$?([\d.]+)\s*vs\s*\$?([\d.]+)/);
     if (m) {
       setChartEmpty("eps", false);
       makeChart("eps", "bar", ["Reported", "Forecast"],
@@ -1244,7 +1244,7 @@ function renderBeatMissBadge() {
   if (!el) return;
   const parsed = (lastAnalystClaims || []).map(parseClaim);
   const eps = parsed.find((p) => /consensus/i.test(p.metric));
-  const m = eps && eps.detail ? eps.detail.match(/([\d.]+)\s*vs\s*([\d.]+)/) : null;
+  const m = eps && eps.detail ? eps.detail.match(/\$?([\d.]+)\s*vs\s*\$?([\d.]+)/) : null;
   if (!m) { show(el, false); return; }
   const reported = Number(m[1]), forecast = Number(m[2]);
   let text, cls;
