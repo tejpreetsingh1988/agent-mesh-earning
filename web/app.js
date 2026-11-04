@@ -951,7 +951,7 @@ async function searchCompanies() {
     searchCache.set(query, matches);
     renderSearchResults(matches, query);
   } catch (e) {
-    box.innerHTML = `<p class="search-empty">Company search is unavailable right now (${esc(e.message)}) — use the ticker box below.</p>`;
+    box.innerHTML = `<p class="search-empty">Company search is unavailable right now (${esc(e.message)}) — try a different spelling, or pick a company from the instant matches above.</p>`;
     show(box, true);
   } finally {
     searching = false;
