@@ -33,6 +33,18 @@ from .schemas import Analysis, Briefing, EvidencePack
 from .writer import write_briefing
 
 
+def error_event(e: Exception) -> dict:
+    """Final stream event for a failed run. A Critic refusal carries
+    its verdict and issues in structured form so the frontend can
+    render the gate's decision (final FAIL + reasons) instead of
+    guessing from a stringified exception. Every other failure
+    stays a plain error event, as before."""
+    if isinstance(e, CriticFailed):
+        return {"event": "error", "error": str(e), "verdict": "FAIL",
+                "issues": e.issues}
+    return {"event": "error", "error": str(e)}
+
+
 async def _emit(on_event, event: dict):
     if on_event is None:
         return
