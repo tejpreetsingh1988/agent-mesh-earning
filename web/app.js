@@ -970,7 +970,11 @@ function renderQuarterPicker(label) {
 function claimValueMap(claims) {
   const map = new Map();
   (claims || []).forEach((c) => {
-    const p = parseClaim(c);
+    // Briefing table rows carry `claim`, not `text` (the Analysis
+    // claim shape parseClaim was written for). Without this
+    // fallback every row parses to a blank metric and the
+    // comparison collapses to a single nameless row.
+    const p = parseClaim({ ...c, text: c.text ?? c.claim ?? "" });
     // Value plus its direction arrow: parseClaim's value drops the
     // "+" (the Analyst table shows direction via the arrow), but a
     // standalone comparison table needs the direction in the cell.
@@ -1048,10 +1052,13 @@ function startCompare(secondTicker) {
   if (note) show(note, false);
   const box = $("compare-results");
   if (box) show(box, false);
-  // Same quarter as the base briefing, so the comparison is
-  // like-for-like; an unparseable base label means latest.
-  const m = /^Q[1-4] \d{4}$/.exec(base.quarter_label || "");
-  getBriefing(second, m ? base.quarter_label : "", (b) => renderComparison(base, b));
+  // Latest vs latest, NOT the base's quarter: calendar quarter
+  // labels only fit December year-end companies. Forcing the
+  // base's label onto a January year-end company (Nvidia's
+  // quarters end Jan/Apr/Jul/Oct) invents a quarter it never
+  // reported and fails NOT_REPORTED_YET. The comparison names
+  // both quarters and warns when they differ.
+  getBriefing(second, "", (b) => renderComparison(base, b));
 }
 
 function renderCompareResults(matches) {
