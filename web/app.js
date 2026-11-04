@@ -813,7 +813,73 @@ $("log-download").addEventListener("click", () => {
   URL.revokeObjectURL(a.href);
 });
 
+let lastBriefing = null;
+
+// Markdown export of the finished briefing: the same record the
+// article shows (verdict, claims with derivations, drivers,
+// story as written, sources, trace), plus the footer disclaimer
+// the page itself carries. Claim lines use the claim text, which
+// already carries the rounded figure — never the raw float.
+function briefingMarkdown(b) {
+  const stripFacts = (d) => String(d || "").replace(/, from facts.*$/, "");
+  const lines = [];
+  lines.push(`# ${b.ticker} — ${b.quarter_label} earnings briefing`, "");
+  lines.push(`**Verdict:** ${b.verdict}`, "");
+  lines.push("## Verified claims");
+  (b.table || []).forEach((row) => {
+    lines.push(`- ${row.claim}`);
+    const d = stripFacts(row.derivation);
+    if (d) lines.push(`  Derivation: ${d}`);
+  });
+  lines.push("");
+  if ((b.drivers || []).length) {
+    lines.push("## What drove the quarter");
+    b.drivers.forEach((d) => lines.push(`- ${d}`));
+    lines.push("");
+  }
+  if (b.market_reaction) {
+    lines.push("## Market reaction", b.market_reaction, "");
+  }
+  if (b.story) {
+    lines.push("## Story", b.story, "");
+  }
+  const isNote = (w) => /No module named|failed:/.test(w);
+  const watch = (b.guidance_and_watch || []).filter((w) => !isNote(w));
+  const notes = (b.guidance_and_watch || []).filter(isNote);
+  if (watch.length) {
+    lines.push("## Guidance and what to watch");
+    watch.forEach((w) => lines.push(`- ${w}`));
+    lines.push("");
+  }
+  if (notes.length) {
+    lines.push("## Data notes");
+    notes.forEach((w) => lines.push(`- ${w}`));
+    lines.push("");
+  }
+  lines.push("---", `Story written via: ${b.story_model || "—"}`);
+  (b.sources || []).forEach((s) => {
+    lines.push(`Source: ${s.publisher || "Source"}${s.url ? ` (${s.url})` : ""}`);
+  });
+  lines.push(`Trace: ${b.trace_id || "—"}`);
+  lines.push(`Exported ${new Date().toLocaleString()} from agent-mesh-earnings.pages.dev.`);
+  lines.push("Educational demo, not investment advice. No buy, sell, or hold recommendation.");
+  return lines.join("\n") + "\n";
+}
+
+$("briefing-download").addEventListener("click", () => {
+  if (!lastBriefing) return;
+  const b = lastBriefing;
+  const quarter = String(b.quarter_label || "").replace(/[^A-Za-z0-9]+/g, "-");
+  const blob = new Blob([briefingMarkdown(b)], { type: "text/markdown" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `Agent-Mesh-${b.ticker}-${quarter}.md`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
 function render(b) {
+  lastBriefing = b;
   $("b-ticker").textContent = b.ticker;
   $("b-quarter").textContent = b.quarter_label;
   $("b-verdict").textContent = b.verdict;
