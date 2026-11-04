@@ -41,7 +41,7 @@ PAGE = """<!DOCTYPE html>
 <main class="container">
   <h1>{name} ({ticker})</h1>
   <p>Ticker: {ticker}. Company: {name}.</p>
-  <p>Get the latest earnings briefing for {name} ({ticker}): verified
+{note_line}  <p>Get the latest earnings briefing for {name} ({ticker}): verified
   revenue, margins, and earnings-per-share from SEC filings, checked
   by the Critic agent before the story is written. US large-cap,
   most recent reported quarter.</p>
@@ -83,7 +83,9 @@ def main() -> int:
             print(f"skipping duplicate/empty ticker: {c!r}", file=sys.stderr)
             continue
         seen.add(ticker)
-        page = PAGE.format(name=c["name"], ticker=ticker)
+        note = c.get("note", "").strip()
+        note_line = f"  <p>{note}</p>\n" if note else ""
+        page = PAGE.format(name=c["name"], ticker=ticker, note_line=note_line)
         (ROOT / "web" / "companies" / f"{ticker}.html").write_text(page)
     links = "\n".join(
         f'    <li><a href="{c["ticker"].strip().upper()}.html">'
