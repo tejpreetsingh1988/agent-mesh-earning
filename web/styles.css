@@ -309,3 +309,32 @@ table.analyst-table td.detail-cell { color: #3f3f46; font-size: 13px; }
 .chart-switch { display: inline-flex; gap: 2px; background: var(--muted); border-radius: calc(var(--radius) - 4px); padding: 2px; margin: 0 0 10px; }
 .chart-switch-btn { font: inherit; font-size: 12px; font-weight: 600; color: var(--muted-foreground); background: transparent; border: 0; border-radius: calc(var(--radius) - 6px); padding: 4px 10px; cursor: pointer; }
 .chart-switch-btn.is-active { color: var(--foreground); background: var(--card); box-shadow: 0 1px 2px rgb(0 0 0 / 0.08); }
+
+/* Dark mode (Batch 16): token swap, then overrides for the colours
+   the light theme hardcodes instead of tokenizing. Charts get
+   their colours from JS (themeColor + Chart.defaults), not here. */
+[data-theme="dark"] {
+  --background: #09090b; --foreground: #fafafa; --card: #18181b; --card-foreground: #fafafa;
+  --muted: #27272a; --muted-foreground: #a1a1aa; --border: #27272a; --input: #3f3f46;
+  --primary: #fafafa; --primary-foreground: #09090b; --secondary: #27272a; --secondary-foreground: #fafafa;
+  --destructive: #f87171; --destructive-bg: #450a0a; --destructive-border: #7f1d1d;
+  --teal: #2dd4bf; --blue: #60a5fa; --amber: #fbbf24; --violet: #a78bfa; --green: #4ade80;
+}
+.page-head-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.page-head-top .btn-secondary { margin-top: 0; white-space: nowrap; }
+[data-theme="dark"] .page-sub, [data-theme="dark"] .story p, [data-theme="dark"] .agent-body .story p { color: #d4d4d8; }
+[data-theme="dark"] .btn-primary:hover { background: #e4e4e7; }
+[data-theme="dark"] .baton-node { color: #09090b; }
+[data-theme="dark"] .loop-leg { background: var(--card); }
+[data-theme="dark"] .alert-title { color: #fca5a5; }
+[data-theme="dark"] .alert-msg { color: #fecaca; }
+[data-theme="dark"] .agent-pass { color: #4ade80; }
+[data-theme="dark"] .agent-fail { color: #fca5a5; }
+[data-theme="dark"] .agent-card[data-state="failed"] .agent-status { color: #fca5a5; }
+[data-theme="dark"] .agent-card[data-state="done"] .agent-status { background: #052e16; color: #4ade80; }
+[data-theme="dark"] .agent-card[data-state="revising"] .agent-status, [data-theme="dark"] .agent-card[data-state="gate"] .agent-status { background: #451a03; color: #fbbf24; }
+[data-theme="dark"] .agent-card[data-agent="scout"] { --agent-tint: #134e4a; }
+[data-theme="dark"] .agent-card[data-agent="analyst"] { --agent-tint: #172554; }
+[data-theme="dark"] .agent-card[data-agent="critic"] { --agent-tint: #451a03; }
+[data-theme="dark"] .agent-card[data-agent="writer"] { --agent-tint: #2e1065; }
+[data-theme="dark"] .cache-banner { background: #27272a; border-color: #3f3f46; }

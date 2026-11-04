@@ -269,6 +269,11 @@ function renderAnalyst(key, claims, el, noteHtml) {
 // All chart data comes from streamed Scout facts / Analyst claims
 // stored below. Nothing is invented here: a chart with no source
 // data stays empty with its placeholder text.
+// Theme-aware chart colours (Batch 16): canvas cannot resolve CSS
+// variables, so dark variants are picked in JS from data-theme.
+function themeColor(light, dark) {
+  return document.documentElement.dataset.theme === "dark" ? dark : light;
+}
 let lastScoutFacts = [];
 let lastAnalystClaims = [];
 const chartInstances = {};
@@ -315,7 +320,7 @@ function updateTrendChart() {
   const data = table.cells.map((c) => Number.isFinite(c.value) ? c.value : null);
   setChartEmpty("trend", false);
   makeChart("trend", "bar", labels, [{ label: `${label} (${table.unit || ""})`.trim(), data,
-    backgroundColor: labels.map((_, i) => i === labels.length - 1 ? "#1d4ed8" : "#93c5fd"),
+    backgroundColor: labels.map((_, i) => i === labels.length - 1 ? themeColor("#1d4ed8", "#60a5fa") : "#93c5fd"),
     borderRadius: 6 }]);
   setChartsVisible();
 }
@@ -329,7 +334,7 @@ function updateGrowthChart() {
     return;
   }
   setChartEmpty("growth", false);
-  const colors = { growth: "#1d4ed8", margin: "#6d28d9", eps: "#b45309", price: "#0f766e", other: "#71717a" };
+  const colors = { growth: themeColor("#1d4ed8", "#60a5fa"), margin: themeColor("#6d28d9", "#a78bfa"), eps: themeColor("#b45309", "#fbbf24"), price: themeColor("#0f766e", "#2dd4bf"), other: themeColor("#71717a", "#a1a1aa") };
   makeChart("growth", "bar", rows.map((r) => r.metric.replace(/\s*YoY\s*/i, "")),
     [{ label: "YoY %", data: rows.map((r) => r.valueNum),
       backgroundColor: rows.map((r) => colors[r.kind] || "#71717a"), borderRadius: 6 }]);
@@ -343,7 +348,7 @@ function updateEpsAndMarginCharts() {
       setChartEmpty("eps", false);
       makeChart("eps", "bar", ["Reported", "Forecast"],
         [{ label: "EPS ($)", data: [Number(m[1]), Number(m[2])],
-          backgroundColor: ["#b45309", "#fde68a"], borderRadius: 6 }]);
+          backgroundColor: [themeColor("#b45309", "#fbbf24"), "#fde68a"], borderRadius: 6 }]);
     }
   } else { destroyChart("eps"); setChartEmpty("eps", true); }
   const margin = parsed.find((p) => p.kind === "margin");
@@ -351,7 +356,7 @@ function updateEpsAndMarginCharts() {
     setChartEmpty("margin", false);
     makeChart("margin", "doughnut", ["Operating margin", "Rest"],
       [{ data: [margin.valueNum, Math.max(0, 100 - margin.valueNum)],
-        backgroundColor: ["#6d28d9", "#e4e4e7"], borderWidth: 0 }]);
+        backgroundColor: [themeColor("#6d28d9", "#a78bfa"), themeColor("#e4e4e7", "#3f3f46")], borderWidth: 0 }]);
   } else { destroyChart("margin"); setChartEmpty("margin", true); }
 }
 function updateGlance(quarterLabelText) {
@@ -1641,6 +1646,29 @@ $("recent-briefings-clear").addEventListener("click", () => {
   renderRecentBriefings();
 });
 renderRecentBriefings();
+
+// Dark mode (Batch 16): the head script already set data-theme
+// before first paint; this syncs the button label, the Chart.js
+// defaults, and any charts already drawn. Stored choice wins on
+// the next visit; otherwise the OS setting applies (head script).
+function currentTheme() {
+  return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+}
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem("ame_theme", theme); } catch {}
+  const toggle = $("theme-toggle");
+  if (toggle) toggle.textContent = theme === "dark" ? "Light mode" : "Dark mode";
+  if (typeof Chart !== "undefined") {
+    Chart.defaults.color = theme === "dark" ? "#a1a1aa" : "#71717a";
+    Chart.defaults.borderColor = theme === "dark" ? "#27272a" : "#e4e4e7";
+  }
+  if (lastScoutFacts.length || lastAnalystClaims.length) updateAllCharts();
+}
+const themeToggle = $("theme-toggle");
+if (themeToggle) themeToggle.addEventListener("click", () =>
+  applyTheme(currentTheme() === "dark" ? "light" : "dark"));
+applyTheme(currentTheme());
 
 // Shareable briefing links: ?ticker=INTC runs that briefing on load,
 // with ?quarter=Q2%202026 when the link names an older quarter.

@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script>/* Theme before first paint (Batch 16): stored choice wins, else the OS setting. */try{var t=localStorage.getItem("ame_theme");if(t!=="dark"&&t!=="light")t=window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t;}catch(e){}</script>
 <link rel="stylesheet" href="styles.css">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 </head>
@@ -15,7 +16,10 @@
 
 <div class="shell">
   <header class="page-head">
-    <p class="eyebrow">SCOUT → ANALYST → CRITIC → WRITER</p>
+    <div class="page-head-top">
+      <p class="eyebrow">SCOUT → ANALYST → CRITIC → WRITER</p>
+      <button type="button" class="btn-secondary theme-toggle" id="theme-toggle">Dark mode</button>
+    </div>
     <h1>Earnings Ledger</h1>
     <p class="page-sub">Pick a company. Four agents find the filing, compute the
     numbers, re-check every one, and only then write the story. Nothing
