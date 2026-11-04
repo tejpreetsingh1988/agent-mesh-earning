@@ -434,5 +434,166 @@
   {
     "name": "Duke Energy Corporation",
     "ticker": "DUK"
+  },
+  {
+    "name": "AppLovin Corporation",
+    "ticker": "APP"
+  },
+  {
+    "name": "Dutch Bros Inc.",
+    "ticker": "BROS"
+  },
+  {
+    "name": "Reddit, Inc.",
+    "ticker": "RDDT"
+  },
+  {
+    "name": "SoFi Technologies, Inc.",
+    "ticker": "SOFI"
+  },
+  {
+    "name": "DraftKings Inc.",
+    "ticker": "DKNG"
+  },
+  {
+    "name": "Affirm Holdings, Inc.",
+    "ticker": "AFRM"
+  },
+  {
+    "name": "Carvana Co.",
+    "ticker": "CVNA"
+  },
+  {
+    "name": "Duolingo, Inc.",
+    "ticker": "DUOL"
+  },
+  {
+    "name": "Toast, Inc.",
+    "ticker": "TOST"
+  },
+  {
+    "name": "Block, Inc.",
+    "ticker": "XYZ",
+    "note": "Formerly traded as SQ."
+  },
+  {
+    "name": "PayPal Holdings, Inc.",
+    "ticker": "PYPL"
+  },
+  {
+    "name": "Wingstop Inc.",
+    "ticker": "WING"
+  },
+  {
+    "name": "Shake Shack Inc.",
+    "ticker": "SHAK"
+  },
+  {
+    "name": "CAVA Group, Inc.",
+    "ticker": "CAVA"
+  },
+  {
+    "name": "Sweetgreen, Inc.",
+    "ticker": "SG"
+  },
+  {
+    "name": "e.l.f. Beauty, Inc.",
+    "ticker": "ELF"
+  },
+  {
+    "name": "Crocs, Inc.",
+    "ticker": "CROX"
+  },
+  {
+    "name": "Deckers Outdoor Corporation",
+    "ticker": "DECK"
+  },
+  {
+    "name": "Axon Enterprise, Inc.",
+    "ticker": "AXON"
+  },
+  {
+    "name": "Amphenol Corporation",
+    "ticker": "APH"
+  },
+  {
+    "name": "Hims & Hers Health, Inc.",
+    "ticker": "HIMS"
+  },
+  {
+    "name": "Upstart Holdings, Inc.",
+    "ticker": "UPST"
+  },
+  {
+    "name": "Unity Software Inc.",
+    "ticker": "U"
+  },
+  {
+    "name": "Fair Isaac Corporation",
+    "ticker": "FICO"
+  },
+  {
+    "name": "MSCI Inc.",
+    "ticker": "MSCI"
+  },
+  {
+    "name": "Fortinet, Inc.",
+    "ticker": "FTNT"
+  },
+  {
+    "name": "Roku, Inc.",
+    "ticker": "ROKU"
+  },
+  {
+    "name": "Lyft, Inc.",
+    "ticker": "LYFT"
+  },
+  {
+    "name": "Rivian Automotive, Inc.",
+    "ticker": "RIVN"
+  },
+  {
+    "name": "DocuSign, Inc.",
+    "ticker": "DOCU"
+  },
+  {
+    "name": "Zoom Communications, Inc.",
+    "ticker": "ZM"
+  },
+  {
+    "name": "Delta Air Lines, Inc.",
+    "ticker": "DAL"
+  },
+  {
+    "name": "United Airlines Holdings, Inc.",
+    "ticker": "UAL"
+  },
+  {
+    "name": "Southwest Airlines Co.",
+    "ticker": "LUV"
+  },
+  {
+    "name": "Hyatt Hotels Corporation",
+    "ticker": "H"
+  },
+  {
+    "name": "Keurig Dr Pepper Inc.",
+    "ticker": "KDP"
+  },
+  {
+    "name": "The Hershey Company",
+    "ticker": "HSY"
+  },
+  {
+    "name": "Colgate-Palmolive Company",
+    "ticker": "CL"
+  },
+  {
+    "name": "Kimberly-Clark Corporation",
+    "ticker": "KMB"
+  },
+  {
+    "name": "Sysco Corporation",
+    "ticker": "SYY"
   }
 ]
