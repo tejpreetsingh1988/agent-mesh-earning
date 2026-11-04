@@ -607,6 +607,7 @@ async function runStream(ticker) {
           const ev = JSON.parse(line.slice(6));
           if (ev.event === "briefing") {
             render(ev.briefing);
+            saveBriefingCache(ev.briefing);
             const total = ((Date.now() - runStartedAt) / 1000).toFixed(1);
             stopElapsed(`Done in ${total}s`);
             setConductor("Conductor — Pipeline Lead", `Briefing complete in ${total}s.`);
@@ -660,12 +661,59 @@ async function runPost(ticker) {
     throw new Error(body.error || body.result || `Request failed (HTTP ${resp.status})`);
   }
   render(body.result);
+  saveBriefingCache(body.result);
 }
 
 // The ticker box is gone (Nov 2, 2026): the company search is
 // the only search. The briefing's ticker lives here, set by the
 // suggestion click that starts the run.
 let currentTicker = "";
+
+// Repeat-briefing cache: a completed briefing (plus the Scout
+// facts its charts need) is saved per ticker in localStorage.
+// A repeat run renders it instantly with a banner naming the
+// saved time and quarter — never silently stale — and Refresh
+// deletes the entry and re-runs the live pipeline.
+function cacheKey(ticker) { return `ame_briefing_${ticker}`; }
+function readBriefingCache(ticker) {
+  try {
+    const raw = localStorage.getItem(cacheKey(ticker));
+    if (!raw) return null;
+    const entry = JSON.parse(raw);
+    if (!entry || !entry.briefing || !entry.savedAt) return null;
+    return entry;
+  } catch { return null; }
+}
+function saveBriefingCache(briefing) {
+  try {
+    localStorage.setItem(cacheKey(briefing.ticker), JSON.stringify({
+      briefing, facts: lastScoutFacts || [], savedAt: Date.now(),
+    }));
+  } catch { /* cache is best-effort; a full store never breaks a run */ }
+}
+function hideCacheBanner() {
+  const b = $("cache-banner");
+  if (b) show(b, false);
+}
+function showCacheBanner(ticker, cached) {
+  let banner = $("cache-banner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "cache-banner";
+    banner.className = "cache-banner";
+    $("briefing").parentNode.insertBefore(banner, $("briefing"));
+  }
+  const when = new Date(cached.savedAt).toLocaleString();
+  const quarter = cached.briefing.quarter_label || "";
+  banner.innerHTML = `Showing a briefing saved ${esc(when)} for ${esc(quarter)}. `
+    + `<button type="button" class="btn-secondary" id="cache-refresh">Refresh for latest data</button>`;
+  banner.querySelector("#cache-refresh").addEventListener("click", () => {
+    try { localStorage.removeItem(cacheKey(ticker)); } catch {}
+    hideCacheBanner();
+    getBriefing(ticker);
+  });
+  show(banner, true);
+}
 
 async function getBriefing(ticker) {
   ticker = String(ticker || "").trim().toUpperCase();
@@ -677,6 +725,19 @@ async function getBriefing(ticker) {
     history.replaceState(null, "", url);
   } catch { /* URL sharing is best-effort */ }
   currentTicker = ticker;
+  // Repeat run: serve the saved briefing instantly, with its banner.
+  // No pipeline, no agent cards, no log — the banner is the whole story.
+  const cached = readBriefingCache(ticker);
+  if (cached) {
+    lastScoutFacts = cached.facts || [];
+    render(cached.briefing);
+    show($("agents"), false);
+    show($("log"), false);
+    show($("error"), false);
+    showCacheBanner(ticker, cached);
+    return;
+  }
+  hideCacheBanner();
   running = true;
   $("company-go").disabled = true;
   show($("briefing"), false);
