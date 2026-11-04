@@ -270,4 +270,7 @@ table.analyst-table td.detail-cell { color: #3f3f46; font-size: 13px; }
 /* Cached-briefing banner (Batch 2): names the save time and quarter. */
 .briefing-actions { margin-bottom: 1rem; }
 .briefing-actions .btn-secondary { margin-top: 0; }
+.quarter-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
+.quarter-picker .label { font-size: 13px; color: var(--muted-foreground); }
+.quarter-picker .btn-secondary { margin-top: 0; }
 .cache-banner { border: 1px solid #e4e4e7; border-radius: 0.625rem; padding: 12px 16px; margin-bottom: 16px; background: #fafafa; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }

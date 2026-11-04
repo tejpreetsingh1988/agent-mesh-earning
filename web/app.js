@@ -623,8 +623,9 @@ function showBriefingError(ticker, message) {
 // Returns true when the stream spoke (briefing rendered or an
 // error event shown) and false when it failed before any event,
 // which is the only case that falls back to POST.
-async function runStream(ticker) {
-  const resp = await fetch(`${ORCHESTRATOR_URL}/tasks/stream?ticker=${encodeURIComponent(ticker)}`);
+async function runStream(ticker, quarter = "") {
+  const q = quarter ? `&quarter=${encodeURIComponent(quarter)}` : "";
+  const resp = await fetch(`${ORCHESTRATOR_URL}/tasks/stream?ticker=${encodeURIComponent(ticker)}${q}`);
   if (!resp.ok || !resp.body) return false;
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
@@ -645,7 +646,7 @@ async function runStream(ticker) {
           const ev = JSON.parse(line.slice(6));
           if (ev.event === "briefing") {
             render(ev.briefing);
-            saveBriefingCache(ev.briefing);
+            saveBriefingCache(ev.briefing, quarter);
             const total = ((Date.now() - runStartedAt) / 1000).toFixed(1);
             stopElapsed(`Done in ${total}s`);
             setConductor("Conductor — Pipeline Lead", `Briefing complete in ${total}s.`);
@@ -692,43 +693,51 @@ async function runStream(ticker) {
   return false;
 }
 
-async function runPost(ticker) {
+async function runPost(ticker, quarter = "") {
+  const payload = { ticker };
+  if (quarter) payload.quarter = quarter;
   const resp = await fetch(`${ORCHESTRATOR_URL}/tasks/send`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ticker }),
+    body: JSON.stringify(payload),
   });
   const body = await resp.json();
   if (!resp.ok || body.state !== "completed") {
     throw new Error(body.error || body.result || `Request failed (HTTP ${resp.status})`);
   }
   render(body.result);
-  saveBriefingCache(body.result);
+  saveBriefingCache(body.result, quarter);
 }
 
 // The ticker box is gone (Nov 2, 2026): the company search is
 // the only search. The briefing's ticker lives here, set by the
 // suggestion click that starts the run.
 let currentTicker = "";
+let currentQuarter = "";
 
 // Repeat-briefing cache: a completed briefing (plus the Scout
 // facts its charts need) is saved per ticker in localStorage.
 // A repeat run renders it instantly with a banner naming the
 // saved time and quarter — never silently stale — and Refresh
 // deletes the entry and re-runs the live pipeline.
-function cacheKey(ticker) { return `ame_briefing_${ticker}`; }
-function readBriefingCache(ticker) {
+function cacheKey(ticker, quarter) { return `ame_briefing_${ticker}_${quarter || "LATEST"}`; }
+function legacyCacheKey(ticker) { return `ame_briefing_${ticker}`; }
+function readBriefingCache(ticker, quarter) {
   try {
-    const raw = localStorage.getItem(cacheKey(ticker));
+    // One-time migration: entries saved before quarters existed
+    // live under the legacy key; a latest-quarter read falls back
+    // to them, and the next save writes the new key.
+    const raw = localStorage.getItem(cacheKey(ticker, quarter))
+      || (!quarter ? localStorage.getItem(legacyCacheKey(ticker)) : null);
     if (!raw) return null;
     const entry = JSON.parse(raw);
     if (!entry || !entry.briefing || !entry.savedAt) return null;
     return entry;
   } catch { return null; }
 }
-function saveBriefingCache(briefing) {
+function saveBriefingCache(briefing, quarter) {
   try {
-    localStorage.setItem(cacheKey(briefing.ticker), JSON.stringify({
+    localStorage.setItem(cacheKey(briefing.ticker, quarter), JSON.stringify({
       briefing, facts: lastScoutFacts || [], savedAt: Date.now(),
     }));
   } catch { /* cache is best-effort; a full store never breaks a run */ }
@@ -737,7 +746,7 @@ function hideCacheBanner() {
   const b = $("cache-banner");
   if (b) show(b, false);
 }
-function showCacheBanner(ticker, cached) {
+function showCacheBanner(ticker, cached, quarter) {
   let banner = $("cache-banner");
   if (!banner) {
     banner = document.createElement("div");
@@ -746,42 +755,56 @@ function showCacheBanner(ticker, cached) {
     $("briefing").parentNode.insertBefore(banner, $("briefing"));
   }
   const when = new Date(cached.savedAt).toLocaleString();
-  const quarter = cached.briefing.quarter_label || "";
-  banner.innerHTML = `Showing a briefing saved ${esc(when)} for ${esc(quarter)}. `
+  const label = cached.briefing.quarter_label || "";
+  banner.innerHTML = `Showing a briefing saved ${esc(when)} for ${esc(label)}. `
     + `<button type="button" class="btn-secondary" id="cache-refresh">Refresh for latest data</button>`;
   banner.querySelector("#cache-refresh").addEventListener("click", () => {
-    try { localStorage.removeItem(cacheKey(ticker)); } catch {}
+    try {
+      localStorage.removeItem(cacheKey(ticker, quarter));
+      if (!quarter) localStorage.removeItem(legacyCacheKey(ticker));
+    } catch {}
     hideCacheBanner();
-    getBriefing(ticker);
+    getBriefing(ticker, quarter);
   });
   show(banner, true);
 }
 
-async function getBriefing(ticker) {
+function setQuarterButtonsDisabled(disabled) {
+  document.querySelectorAll("#quarter-picker button").forEach((b) => { b.disabled = disabled; });
+}
+
+async function getBriefing(ticker, quarter = "") {
   ticker = String(ticker || "").trim().toUpperCase();
+  quarter = String(quarter || "").trim();
+  if (!/^Q[1-4] \d{4}$/.test(quarter)) quarter = "";
   if (!ticker || running) return;
-  // Shareable link: the URL always names the briefing being run.
+  // Shareable link: the URL always names the briefing being run,
+  // plus its quarter when it is not the latest.
   try {
     const url = new URL(location.href);
     url.searchParams.set("ticker", ticker);
+    if (quarter) url.searchParams.set("quarter", quarter);
+    else url.searchParams.delete("quarter");
     history.replaceState(null, "", url);
   } catch { /* URL sharing is best-effort */ }
   currentTicker = ticker;
+  currentQuarter = quarter;
   // Repeat run: serve the saved briefing instantly, with its banner.
   // No pipeline, no agent cards, no log — the banner is the whole story.
-  const cached = readBriefingCache(ticker);
+  const cached = readBriefingCache(ticker, quarter);
   if (cached) {
     lastScoutFacts = cached.facts || [];
     render(cached.briefing);
     show($("agents"), false);
     show($("log"), false);
     show($("error"), false);
-    showCacheBanner(ticker, cached);
+    showCacheBanner(ticker, cached, quarter);
     return;
   }
   hideCacheBanner();
   running = true;
   $("company-go").disabled = true;
+  setQuarterButtonsDisabled(true);
   show($("briefing"), false);
   show($("error"), false);
   show($("agents"), true);
@@ -795,7 +818,7 @@ async function getBriefing(ticker) {
   try {
     let streamed;
     try {
-      streamed = await runStream(ticker);
+      streamed = await runStream(ticker, quarter);
     } catch (e) {
       streamed = false;
     }
@@ -803,7 +826,7 @@ async function getBriefing(ticker) {
       setConductor("Conductor — Pipeline Lead",
         "Live stream did not speak; showing the final briefing only.");
       try {
-        await runPost(ticker);
+        await runPost(ticker, quarter);
         stopElapsed();
       } catch (e) {
         stopElapsed();
@@ -813,6 +836,7 @@ async function getBriefing(ticker) {
   } finally {
     stopElapsed($("conductor-time").textContent || undefined);
     $("company-go").disabled = false;
+    setQuarterButtonsDisabled(false);
     running = false;
   }
 }
@@ -892,8 +916,48 @@ $("briefing-download").addEventListener("click", () => {
   URL.revokeObjectURL(a.href);
 });
 
+// Quarter picker: the three calendar quarters before the briefing's
+// own quarter, derived from its label (never guessed — an
+// unparseable label hides the picker). When the briefing is for
+// an older quarter, a Latest button leads back. Clicking a button
+// runs that quarter through the same pipeline; the cache keeps
+// quarters separate, so an older briefing never overwrites the
+// latest one.
+function prevQuarters(label, count) {
+  const m = /^Q([1-4]) (\d{4})$/.exec(label || "");
+  if (!m) return [];
+  let q = Number(m[1]);
+  let y = Number(m[2]);
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    q -= 1;
+    if (q === 0) { q = 4; y -= 1; }
+    out.push(`Q${q} ${y}`);
+  }
+  return out;
+}
+
+function renderQuarterPicker(label) {
+  const wrap = $("quarter-picker");
+  const btns = $("quarter-buttons");
+  if (!wrap || !btns) return;
+  const prev = prevQuarters(label, 3);
+  if (!prev.length) { show(wrap, false); return; }
+  let html = prev.map((l) =>
+    `<button type="button" class="btn-secondary quarter-btn" data-q="${esc(l)}">${esc(l)}</button>`).join("");
+  if (currentQuarter) {
+    html += `<button type="button" class="btn-secondary quarter-btn" data-q="">Latest quarter</button>`;
+  }
+  btns.innerHTML = html;
+  btns.querySelectorAll(".quarter-btn").forEach((btn) => {
+    btn.addEventListener("click", () => getBriefing(currentTicker, btn.dataset.q));
+  });
+  show(wrap, true);
+}
+
 function render(b) {
   lastBriefing = b;
+  renderQuarterPicker(b.quarter_label);
   $("b-ticker").textContent = b.ticker;
   $("b-quarter").textContent = b.quarter_label;
   $("b-verdict").textContent = b.verdict;
@@ -1158,12 +1222,16 @@ async function renderMostSearched() {
 }
 renderMostSearched();
 
-// Shareable briefing links: ?ticker=INTC runs that briefing on load.
+// Shareable briefing links: ?ticker=INTC runs that briefing on load,
+// with ?quarter=Q2%202026 when the link names an older quarter.
 try {
-  const param = new URLSearchParams(location.search).get("ticker");
+  const params = new URLSearchParams(location.search);
+  const param = params.get("ticker");
+  const qParam = params.get("quarter");
   if (param && /^[A-Za-z]{1,10}$/.test(param.trim())) {
     $("company-search").value = param.trim().toUpperCase();
-    getBriefing(param.trim().toUpperCase());
+    getBriefing(param.trim().toUpperCase(),
+      qParam && /^Q[1-4] \d{4}$/.test(qParam.trim()) ? qParam.trim() : "");
   }
 } catch { /* a bad share link never breaks the page */ }
 
