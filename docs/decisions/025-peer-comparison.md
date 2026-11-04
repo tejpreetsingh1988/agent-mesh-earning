@@ -13,11 +13,31 @@ briefing search and must not feed "most searched").
   onDone)` — the new optional callback fires after
   the briefing renders on both the stream and POST
   paths, and is skipped for the cache banner in
-  compare mode. The second briefing runs for the
-  SAME quarter as the base briefing (Batch 7's
-  quarter plumbing), so the comparison is
-  like-for-like; a mismatched quarter label shows a
-  warning line instead of silently comparing.
+  compare mode. The second briefing runs for its
+  LATEST quarter, not the base's: calendar quarter
+  labels only fit December year-end companies, and
+  forcing the base's label onto a January year-end
+  company (Nvidia's quarters end Jan/Apr/Jul/Oct)
+  invents a quarter it never reported and fails
+  NOT_REPORTED_YET — proven live Nov 4 (NVDA +
+  Q3 2026). The comparison names both quarters
+  and warns when they differ; a user who wants an
+  older quarter for the second company can still
+  pick it with the quarter picker first and compare
+  from there (latest-vs-latest is the default).
+- Claim shape fix (found by the same verification):
+  briefing table rows carry `claim`, not `text`
+  (the Analysis shape parseClaim expects). Without
+  a fallback every row parsed to a blank metric
+  and the comparison collapsed to one nameless
+  row with dashes in the headline table. Fixed in
+  claimValueMap: `text: c.text ?? c.claim ?? ""`.
+  Known Batch 7 gap this surfaced: companies with
+  non-calendar fiscal quarters (NVDA: quarter
+  ended 2026-07-26) get the fallback label, so the
+  quarter picker hides for them — full fiscal
+  support would need Scout to accept period-end
+  dates, not just "Qn YYYY".
 - The comparison section shows both verdicts, a
   headline table (Revenue YoY growth, Operating
   margin, EPS vs consensus), and an all-claims
