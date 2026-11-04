@@ -1024,6 +1024,32 @@ async function renderRecentSearches() {
 }
 renderRecentSearches();
 
+// Most searched strip: top queries by count from the search log.
+// Same chip behavior as recent searches; stays hidden when the
+// log is unreachable or empty.
+async function renderMostSearched() {
+  const wrap = $("most-searched");
+  const chips = $("most-chips");
+  if (!wrap || !chips) return;
+  try {
+    const resp = await fetch(LOG_URL + "/stats");
+    if (!resp.ok) return;
+    const body = await resp.json();
+    const top = (body.top || []).filter((t) => t.query && t.count > 0).slice(0, 8);
+    if (!top.length) return;
+    chips.innerHTML = top.map((t) =>
+      `<button type="button" class="chip search-match" data-q="${esc(t.query)}">${esc(t.query)} ×${t.count}</button>`).join("");
+    chips.querySelectorAll(".search-match").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        $("company-search").value = btn.dataset.q;
+        searchCompanies();
+      });
+    });
+    show(wrap, true);
+  } catch { /* strip stays hidden when the log is unreachable */ }
+}
+renderMostSearched();
+
 // Shareable briefing links: ?ticker=INTC runs that briefing on load.
 try {
   const param = new URLSearchParams(location.search).get("ticker");
