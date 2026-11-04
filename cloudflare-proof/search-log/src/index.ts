@@ -84,6 +84,18 @@ export default {
 			return json({ ok: true });
 		}
 
+		if (url.pathname === "/stats" && request.method === "GET") {
+			await ensureTable(env);
+			const { results: top } = await env.DB.prepare(
+				"SELECT query, COUNT(*) AS count, MAX(created_at) AS last FROM searches GROUP BY LOWER(query) ORDER BY count DESC, last DESC LIMIT 10",
+			).all();
+			const { results: totalRows } = await env.DB.prepare(
+				"SELECT COUNT(*) AS n FROM searches",
+			).all();
+			const total = (totalRows[0] as { n?: number } | undefined)?.n ?? 0;
+			return json({ total, top });
+		}
+
 		if (url.pathname === "/recent" && request.method === "GET") {
 			const parsed = parseInt(url.searchParams.get("limit") ?? "50", 10);
 			const limit = Math.min(100, Math.max(1, Number.isNaN(parsed) ? 50 : parsed));
