@@ -737,6 +737,7 @@ async function runStream(ticker, quarter = "", onBriefing = null) {
             if (onBriefing) onBriefing(ev.briefing);
             const total = ((Date.now() - runStartedAt) / 1000).toFixed(1);
             stopElapsed(`Done in ${total}s`);
+            setCheckedLine(total);
             setConductor("Done — briefing ready", `Ready in ${total}s · 4 of 4 steps`);
             setLoop("conductor", `Briefing complete in ${total}s.`);
             setHandoverLine("writer-conductor", `Writer → Conductor · briefing complete in ${total}s`);
@@ -807,6 +808,7 @@ async function runPost(ticker, quarter = "", onBriefing = null) {
     throw new Error(body.error || body.result || `Request failed (HTTP ${resp.status})`);
   }
   render(body.result);
+  setCheckedLine(((Date.now() - runStartedAt) / 1000).toFixed(1));
   saveBriefingCache(body.result, quarter);
   renderRecentBriefings();
   if (onBriefing) onBriefing(body.result);
@@ -1233,6 +1235,38 @@ function renderCompareResults(matches) {
   show(box, true);
 }
 
+// EPS beat/miss badge (Batch 19): the same consensus claim and
+// the same "reported vs forecast" parse as the EPS chart, so the
+// badge can never disagree with the chart. Hidden when no
+// consensus claim exists; the title carries the two numbers.
+function renderBeatMissBadge() {
+  const el = $("b-beatmiss");
+  if (!el) return;
+  const parsed = (lastAnalystClaims || []).map(parseClaim);
+  const eps = parsed.find((p) => /consensus/i.test(p.metric));
+  const m = eps && eps.detail ? eps.detail.match(/([\d.]+)\s*vs\s*([\d.]+)/) : null;
+  if (!m) { show(el, false); return; }
+  const reported = Number(m[1]), forecast = Number(m[2]);
+  let text, cls;
+  if (reported > forecast) { text = "▲ EPS beat"; cls = "badge-beat"; }
+  else if (reported < forecast) { text = "▼ EPS miss"; cls = "badge-miss"; }
+  else { text = "EPS met"; cls = "badge-outline"; }
+  el.textContent = text;
+  el.className = `badge ${cls}`;
+  el.title = `Reported ${m[1]} vs consensus ${m[2]}`;
+  show(el, true);
+}
+
+// Checked-in line (Batch 19): shown only by a run's completion
+// site, with that run's total seconds. render() hides it, so a
+// cached briefing never claims a fresh check.
+function setCheckedLine(totalSeconds) {
+  const el = $("b-checked");
+  if (!el) return;
+  el.textContent = `Checked in ${totalSeconds}s by Scout, Analyst, Critic, Writer.`;
+  show(el, true);
+}
+
 function render(b) {
   lastBriefing = b;
   renderQuarterPicker(b.quarter_label);
@@ -1253,6 +1287,12 @@ function render(b) {
   lastAnalystClaims = briefingClaims;
   renderAnalyst("briefing", briefingClaims, $("b-table"), "");
   updateAllCharts(b.quarter_label);
+  renderBeatMissBadge();
+  // The checked line belongs to a fresh run only: render() also
+  // serves cache restores, where no check happened this visit,
+  // so it starts hidden here and the run's completion site
+  // shows it with that run's time (Batch 19).
+  show($("b-checked"), false);
   const drivers = b.drivers || [];
   show($("sec-drivers"), drivers.length > 0);
   $("b-drivers").innerHTML = drivers.map((d) => `<li>${esc(d)}</li>`).join("");
