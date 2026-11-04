@@ -159,6 +159,20 @@ const analystTableData = {};
 const analystTableState = {};
 const analystExpanded = {};
 
+// Display-only cleanup for Analyst derivations: the backend prints
+// raw binary floats, so a derivation can read 4.809999999999999
+// where the fact is 4.81. Numbers with 7+ decimal places at or
+// above 0.01 are float noise — round them to 4 decimals (trailing
+// zeros stripped). Smaller values and ordinary figures (92.279,
+// dates) pass through untouched. This never changes a claim
+// value, only how a formula string reads.
+function roundLongFloats(s) {
+  return String(s).replace(/-?\d+\.\d{7,}/g, (m) => {
+    const n = parseFloat(m);
+    return Math.abs(n) >= 0.01 ? String(Number(n.toFixed(4))) : m;
+  });
+}
+
 function parseClaim(c) {
   const text = String(c.text || "");
   const kindFull = claimKind(text);
@@ -183,7 +197,7 @@ function parseClaim(c) {
   }
   const arrow = valueNum === null ? "" : valueNum < 0 ? " ▼" : valueNum > 0 ? " ▲" : "";
   return { metric, period, detail, kind, kindFull, value, valueNum, arrow,
-    derivation: String(c.derivation || "").replace(/, from facts.*$/, "") };
+    derivation: roundLongFloats(String(c.derivation || "").replace(/, from facts.*$/, "")) };
 }
 
 function analystTableHtml(key, claims) {
@@ -821,7 +835,7 @@ let lastBriefing = null;
 // the page itself carries. Claim lines use the claim text, which
 // already carries the rounded figure — never the raw float.
 function briefingMarkdown(b) {
-  const stripFacts = (d) => String(d || "").replace(/, from facts.*$/, "");
+  const stripFacts = (d) => roundLongFloats(String(d || "").replace(/, from facts.*$/, ""));
   const lines = [];
   lines.push(`# ${b.ticker} — ${b.quarter_label} earnings briefing`, "");
   lines.push(`**Verdict:** ${b.verdict}`, "");
