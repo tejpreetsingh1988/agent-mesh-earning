@@ -27,7 +27,9 @@ import calendar  # noqa: F401  (kept for parity with scout.py's imports)
 from datetime import date, datetime, timezone
 
 from .schemas import EvidencePack, Fact, SourceRef
-from .scout import _QUARTERS, _month_end_from_nasdaq, _now, _quarter_label
+from .scout import (_QUARTERS, _month_end_from_nasdaq, _now,
+                     _pick_quarter_filing, _quarter_end_from_label,
+                     _quarter_label, _shift_days)
 
 
 async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
@@ -40,16 +42,30 @@ async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> Ev
     t = ticker.strip().upper()
     missing: list[str] = []
 
-    # 1. Company + latest earnings filing (the anchor for everything
-    # else) — fetched concurrently; the checks below run in the
-    # old order, so the NOT_REPORTED_YET outcomes are unchanged.
-    # (One behavioural difference: if company facts fail, the
-    # filing call has already been made too — one extra read-only
-    # EDGAR request on an error path, never on the success path.)
-    facts, filing = await asyncio.gather(
-        mcp_call("filings", "get_company_facts", {"ticker": t}),
-        mcp_call("filings", "get_latest_earnings_filing", {"ticker": t}),
-        return_exceptions=True)
+    # A requested quarter, parsed once and used by every step below
+    # (same rules as the sync path — see scout.py).
+    requested_end = _quarter_end_from_label(quarter) if quarter else None
+    if quarter and not requested_end:
+        missing.append(f"Unrecognized quarter label {quarter!r} — using the most recent reported quarter.")
+        quarter = ""  # Fall back fully: the bogus label must not survive as quarter_label.
+
+    # 1. Company + earnings filing (the anchor for everything
+    # else). Latest path: fetched concurrently, as before.
+    # Requested quarter: sequential selection (list filings, probe
+    # consensus per candidate) — the filing must be known before
+    # Phase B, so it cannot join the gather.
+    recent_q = None
+    if requested_end:
+        try:
+            facts = await mcp_call("filings", "get_company_facts", {"ticker": t})
+        except Exception as e:
+            facts = e
+        filing = None
+    else:
+        facts, filing = await asyncio.gather(
+            mcp_call("filings", "get_company_facts", {"ticker": t}),
+            mcp_call("filings", "get_latest_earnings_filing", {"ticker": t}),
+            return_exceptions=True)
     if isinstance(facts, Exception):
         return EvidencePack(
             ticker=t, company_name=t, quarter_label="", quarter_end=date(1970, 1, 1),
@@ -64,18 +80,58 @@ async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> Ev
         )
     company_name = facts.get("company_name") or t
 
-    if isinstance(filing, Exception):
-        return EvidencePack(
-            ticker=t, company_name=company_name, quarter_label="", quarter_end=date(1970, 1, 1),
-            report_date=_now(), status="NOT_REPORTED_YET",
-            missing=[f"filings-mcp get_latest_earnings_filing failed: {filing}"],
-        )
-    if not isinstance(filing, dict) or "error" in filing or not filing.get("filingDate"):
-        return EvidencePack(
-            ticker=t, company_name=company_name, quarter_label="", quarter_end=date(1970, 1, 1),
-            report_date=_now(), status="NOT_REPORTED_YET",
-            missing=["No recent earnings filing (8-K) found via filings-mcp."],
-        )
+    if requested_end:
+        try:
+            recent_q = await mcp_call("filings", "list_recent_filings", {"ticker": t, "limit": 50})
+        except Exception as e:
+            return EvidencePack(
+                ticker=t, company_name=company_name, quarter_label=quarter, quarter_end=date.fromisoformat(requested_end),
+                report_date=_now(), status="NOT_REPORTED_YET",
+                missing=[f"Cannot select a filing for {quarter}: list_recent_filings failed: {e}"],
+            )
+        if not isinstance(recent_q, dict) or "error" in recent_q:
+            return EvidencePack(
+                ticker=t, company_name=company_name, quarter_label=quarter, quarter_end=date.fromisoformat(requested_end),
+                report_date=_now(), status="NOT_REPORTED_YET",
+                missing=[f"Cannot select a filing for {quarter}: list_recent_filings returned an error."],
+            )
+        window_end = _shift_days(requested_end, 75)
+        candidates = [f for f in (recent_q.get("filings") or [])
+                      if f.get("form") == "8-K" and f.get("filingDate")
+                      and requested_end < f["filingDate"] <= window_end]
+        endings: dict[str, str | None] = {}
+        for cand in sorted(candidates, key=lambda f: f["filingDate"])[:5]:
+            try:
+                probe = await mcp_call("estimates_news", "get_consensus_estimates",
+                                       {"ticker": t, "quarter": "", "report_date": cand["filingDate"]})
+                endings[cand["accessionNumber"]] = (
+                    _month_end_from_nasdaq(probe["fiscal_quarter_ending"])
+                    if isinstance(probe, dict) and probe.get("fiscal_quarter_ending") else None)
+            except Exception:
+                endings[cand["accessionNumber"]] = None
+        filing, confirmed = _pick_quarter_filing(candidates, requested_end, endings)
+        if filing is None:
+            return EvidencePack(
+                ticker=t, company_name=company_name, quarter_label=quarter, quarter_end=date.fromisoformat(requested_end),
+                report_date=_now(), status="NOT_REPORTED_YET",
+                missing=[f"No earnings filing (8-K) found for {quarter} — it may not be reported yet, or it is older than the recent-filings window."],
+            )
+        if not confirmed:
+            missing.append(
+                f"Could not confirm via consensus that this 8-K reported {quarter} — using the earliest 8-K after the quarter end; verify the quarter in the document text.")
+    else:
+        if isinstance(filing, Exception):
+            return EvidencePack(
+                ticker=t, company_name=company_name, quarter_label="", quarter_end=date(1970, 1, 1),
+                report_date=_now(), status="NOT_REPORTED_YET",
+                missing=[f"filings-mcp get_latest_earnings_filing failed: {filing}"],
+            )
+        if not isinstance(filing, dict) or "error" in filing or not filing.get("filingDate"):
+            return EvidencePack(
+                ticker=t, company_name=company_name, quarter_label="", quarter_end=date(1970, 1, 1),
+                report_date=_now(), status="NOT_REPORTED_YET",
+                missing=["No recent earnings filing (8-K) found via filings-mcp."],
+            )
     report_date_str = filing["filingDate"]
     try:
         report_date = datetime.fromisoformat(report_date_str).replace(tzinfo=timezone.utc)
@@ -88,7 +144,7 @@ async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> Ev
     # price, consensus) so missing[] keeps its old order.
     (recent, _filing_text, hist, filing_facts,
      price_raw, consensus_raw) = await asyncio.gather(
-        mcp_call("filings", "list_recent_filings", {"ticker": t, "limit": 10}),
+        asyncio.sleep(0, result=recent_q) if requested_end else mcp_call("filings", "list_recent_filings", {"ticker": t, "limit": 10}),
         mcp_call("filings", "get_filing_text", {
             "ticker": t, "accession": filing.get("accessionNumber"),
             "primary_document": filing.get("primaryDocument"), "max_chars": 12000}),
@@ -166,6 +222,19 @@ async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> Ev
     except Exception:
         pass
 
+    # Requested quarter: truncate facts to the quarter end (see
+    # scout.py); no fact for the quarter end itself means there
+    # is nothing to brief.
+    if requested_end:
+        facts_list = [f for f in facts_list if f.period <= requested_end]
+        if not any(f.period == requested_end for f in facts_list):
+            return EvidencePack(
+                ticker=t, company_name=company_name, quarter_label=quarter,
+                quarter_end=date.fromisoformat(requested_end), report_date=report_date,
+                status="NOT_REPORTED_YET",
+                missing=[f"No quarterly facts for the quarter ending {requested_end} ({quarter}) — it may be older than the available history."],
+            )
+
     # 3. Price reaction (regular-session closes only).
     price_reaction = None
     try:
@@ -194,9 +263,20 @@ async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> Ev
     except Exception as e:
         missing.append(f"get_consensus_estimates failed: {e}")
 
+    # Requested quarter: discard a consensus row for a different
+    # quarter end (see scout.py).
+    if requested_end and isinstance(consensus, dict) and consensus.get("fiscal_quarter_ending"):
+        cons_end = _month_end_from_nasdaq(consensus["fiscal_quarter_ending"])
+        if cons_end and cons_end != requested_end:
+            missing.append(f"Consensus row is for the quarter ending {cons_end}, not the requested {requested_end} — consensus not used for beat/miss.")
+            consensus = None
+
     # 5. Quarter end, in priority order — never the filing date by default.
+    # A requested quarter overrides the whole chain (see scout.py).
     quarter_end_str = ""
-    if isinstance(consensus, dict) and consensus.get("fiscal_quarter_ending"):
+    if requested_end:
+        quarter_end_str = requested_end
+    elif isinstance(consensus, dict) and consensus.get("fiscal_quarter_ending"):
         quarter_end_str = _month_end_from_nasdaq(consensus["fiscal_quarter_ending"]) or ""
     if not quarter_end_str and facts_list:
         try:
