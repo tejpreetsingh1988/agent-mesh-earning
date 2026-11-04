@@ -894,6 +894,7 @@ async function getBriefing(ticker, quarter = "", onDone = null) {
     show($("error"), false);
     if (onDone) onDone(cached.briefing);
     else showCacheBanner(ticker, cached, quarter);
+    consumePendingAutoCompare(ticker);
     return;
   }
   hideCacheBanner();
@@ -941,6 +942,9 @@ async function getBriefing(ticker, quarter = "", onDone = null) {
     $("compare-search").disabled = false;
     setQuarterButtonsDisabled(false);
     running = false;
+    // The base run just finished (stream or post path); the
+    // running flag is down, so the compare run may start now.
+    consumePendingAutoCompare(currentTicker);
   }
 }
 
@@ -964,6 +968,24 @@ $("error-retry").addEventListener("click", () => {
 });
 
 let lastBriefing = null;
+// Shareable comparison links (Batch 14): ?ticker=BASE&compare=SECOND
+// runs the base briefing on load, then the compare flow once the
+// base finishes. pendingAutoCompare is consumed exactly once, in
+// the cache branch or in getBriefing's finally, and only when the
+// briefing that just finished is the base — a failed base run
+// never triggers a compare against a stale briefing.
+let pendingAutoCompare = null;
+let lastComparisonLink = "";
+
+// Consume a pending auto-compare after the base run finishes.
+// finishedTicker is the ticker whose run just ended (cache or
+// stream); the guard ties it to the base the link named.
+function consumePendingAutoCompare(finishedTicker) {
+  if (!pendingAutoCompare) return;
+  const { second, base } = pendingAutoCompare;
+  pendingAutoCompare = null;
+  if (lastBriefing && lastBriefing.ticker === base && finishedTicker === base) startCompare(second);
+}
 
 // Markdown export of the finished briefing: the same record the
 // article shows (verdict, claims with derivations, drivers,
@@ -1162,7 +1184,22 @@ function startCompare(secondTicker) {
   // quarters end Jan/Apr/Jul/Oct) invents a quarter it never
   // reported and fails NOT_REPORTED_YET. The comparison names
   // both quarters and warns when they differ.
-  getBriefing(second, "", (b) => renderComparison(base, b));
+  const baseQuarter = currentQuarter;
+  getBriefing(second, "", (b) => {
+    renderComparison(base, b);
+    // The shareable comparison link: after the second run rewrote
+    // the URL to its own ticker, restore the pair the page shows.
+    lastComparisonLink = `${location.origin}${location.pathname}?ticker=${base.ticker}&compare=${second}`
+      + (baseQuarter ? `&quarter=${encodeURIComponent(baseQuarter)}` : "");
+    try {
+      const url = new URL(location.href);
+      url.searchParams.set("ticker", base.ticker);
+      url.searchParams.set("compare", second);
+      if (baseQuarter) url.searchParams.set("quarter", baseQuarter);
+      else url.searchParams.delete("quarter");
+      history.replaceState(null, "", url);
+    } catch { /* URL sharing is best-effort */ }
+  });
 }
 
 function renderCompareResults(matches) {
@@ -1432,6 +1469,30 @@ $("compare-search").addEventListener("input", async (e) => {
   renderCompareResults(matches);
 });
 
+// Copy comparison link (Batch 14): the link the compare run
+// restored into the URL — the pair the page shows, not the
+// second briefing's own ticker. Falls back to a textarea copy
+// where the async clipboard API is unavailable.
+const shareBtn = $("comparison-share");
+if (shareBtn) shareBtn.addEventListener("click", async () => {
+  const link = lastComparisonLink || location.href;
+  let ok = false;
+  try { await navigator.clipboard.writeText(link); ok = true; }
+  catch {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = link; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      ok = document.execCommand("copy");
+      ta.remove();
+    } catch { ok = false; }
+  }
+  if (!ok) return;
+  const orig = shareBtn.textContent;
+  shareBtn.textContent = "Link copied";
+  setTimeout(() => { shareBtn.textContent = orig; }, 2000);
+});
+
 // Recent searches strip: what other visitors searched for, from
 // the search log. Clicking a chip runs that search again (which
 // itself gets logged, like any search). Stays hidden when the
@@ -1563,13 +1624,22 @@ renderRecentBriefings();
 
 // Shareable briefing links: ?ticker=INTC runs that briefing on load,
 // with ?quarter=Q2%202026 when the link names an older quarter.
+// ?ticker=BASE&compare=SECOND additionally runs the compare flow
+// once the base briefing finishes (Batch 14).
 try {
   const params = new URLSearchParams(location.search);
   const param = params.get("ticker");
   const qParam = params.get("quarter");
+  const cParam = params.get("compare");
   if (param && /^[A-Za-z]{1,10}$/.test(param.trim())) {
-    $("company-search").value = param.trim().toUpperCase();
-    getBriefing(param.trim().toUpperCase(),
+    const baseTicker = param.trim().toUpperCase();
+    $("company-search").value = baseTicker;
+    if (cParam && /^[A-Za-z]{1,10}$/.test(cParam.trim()) && cParam.trim().toUpperCase() !== baseTicker) {
+      pendingAutoCompare = { second: cParam.trim().toUpperCase(), base: baseTicker };
+      const cs = $("compare-search");
+      if (cs) cs.value = cParam.trim().toUpperCase();
+    }
+    getBriefing(baseTicker,
       qParam && /^Q[1-4] \d{4}$/.test(qParam.trim()) ? qParam.trim() : "");
   }
 } catch { /* a bad share link never breaks the page */ }
