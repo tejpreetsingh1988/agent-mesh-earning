@@ -1369,13 +1369,18 @@ function logoFallback(img, ticker) {
   img.replaceWith(span);
 }
 
-function renderSearchResults(matches, query) {
+function renderSearchResults(matches, query, fallback = false) {
   const box = $("company-results");
   if (!matches.length) {
-    box.innerHTML = `<p class="search-empty">No company matched "${esc(query)}" — try a different spelling, `
-      + `or a ticker like GOOGL (each company page carries its ticker).</p>`;
+    box.innerHTML = fallback
+      ? `<p class="search-empty">No company matched "${esc(query)}" in the index or the directory — try a different spelling, `
+        + `or a ticker like GOOGL (each company page carries its ticker).</p>`
+      : `<p class="search-empty">No company matched "${esc(query)}" — try a different spelling, `
+        + `or a ticker like GOOGL (each company page carries its ticker).</p>`;
   } else {
-    box.innerHTML = matches.map((m) =>
+    const note = fallback
+      ? `<p class="search-empty">No indexed matches — showing directory matches instead.</p>` : "";
+    box.innerHTML = note + matches.map((m) =>
       `<button type="button" class="chip search-match" data-ticker="${esc(m.ticker)}">`
       + `${logoImg(m.ticker, "logo-img logo-chip")}${esc(m.name)} (${esc(m.ticker)})</button>`).join("");
     box.querySelectorAll(".search-match").forEach((btn) => {
@@ -1395,7 +1400,8 @@ async function searchCompanies() {
   if (!query || searching) return;
   logSearch(query, null);
   if (searchCache.has(query)) {
-    renderSearchResults(searchCache.get(query), query);
+    const hit = searchCache.get(query);
+    renderSearchResults(hit.matches, query, hit.fallback);
     return;
   }
   searching = true;
@@ -1421,7 +1427,23 @@ async function searchCompanies() {
         if (matches.length >= 5) break;
       }
     }
-    searchCache.set(query, matches);
+    searchCache.set(query, { matches, fallback: false });
+    if (!matches.length) {
+      // Batch 18: the index found nothing — fall back to the
+      // local directory substring filter (the same matcher as
+      // the instant suggestions) instead of a dead end. This
+      // never burns extra AI Search quota, and the note says so.
+      // The fallback result is cached with its flag, so a repeat
+      // search replays the same note rather than re-querying.
+      const dir = await loadDirectory();
+      const q = query.toLowerCase();
+      const local = dir.filter((c) =>
+        c.name.toLowerCase().includes(q) || c.ticker.toLowerCase().includes(q),
+      ).slice(0, 5);
+      searchCache.set(query, { matches: local, fallback: true });
+      renderSearchResults(local, query, true);
+      return;
+    }
     renderSearchResults(matches, query);
   } catch (e) {
     box.innerHTML = `<p class="search-empty">Company search is unavailable right now (${esc(e.message)}) — try a different spelling, or pick a company from the instant matches above.</p>`;
