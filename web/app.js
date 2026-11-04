@@ -698,6 +698,7 @@ async function runStream(ticker, quarter = "", onBriefing = null) {
           if (ev.event === "briefing") {
             render(ev.briefing);
             saveBriefingCache(ev.briefing, quarter);
+            renderRecentBriefings();
             if (onBriefing) onBriefing(ev.briefing);
             const total = ((Date.now() - runStartedAt) / 1000).toFixed(1);
             stopElapsed(`Done in ${total}s`);
@@ -772,6 +773,7 @@ async function runPost(ticker, quarter = "", onBriefing = null) {
   }
   render(body.result);
   saveBriefingCache(body.result, quarter);
+  renderRecentBriefings();
   if (onBriefing) onBriefing(body.result);
 }
 
@@ -1464,6 +1466,60 @@ async function renderMostSearched() {
   } catch { /* strip stays hidden when the log is unreachable */ }
 }
 renderMostSearched();
+
+// Recent briefings strip: the briefings already saved in this
+// browser's cache, newest first. Clicking one restores it instantly
+// through the normal cache path (banner + Refresh included) — it
+// never re-runs the pipeline and never writes a search-log row.
+// Stored only on this device, in localStorage; Clear wipes the keys.
+function listCachedBriefings() {
+  const items = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith("ame_briefing_")) continue;
+      try {
+        const entry = JSON.parse(localStorage.getItem(key));
+        if (!entry || !entry.briefing || !entry.savedAt) continue;
+        const rest = key.slice("ame_briefing_".length);
+        const cut = rest.lastIndexOf("_");
+        const ticker = entry.briefing.ticker || (cut > 0 ? rest.slice(0, cut) : rest);
+        const q = cut > 0 ? rest.slice(cut + 1) : "";
+        items.push({ ticker, quarter: q === "LATEST" ? "" : q, label: entry.briefing.quarter_label || "", savedAt: entry.savedAt });
+      } catch { /* skip corrupt entries */ }
+    }
+  } catch { return []; }
+  items.sort((a, b) => b.savedAt - a.savedAt);
+  return items.slice(0, 8);
+}
+function renderRecentBriefings() {
+  const wrap = $("recent-briefings");
+  const chips = $("recent-briefing-chips");
+  if (!wrap || !chips) return;
+  const items = listCachedBriefings();
+  if (!items.length) { show(wrap, false); return; }
+  chips.innerHTML = items.map((it) =>
+    `<button type="button" class="chip" data-t="${esc(it.ticker)}" data-q="${esc(it.quarter)}">${esc(it.ticker)}${it.label ? ` · ${esc(it.label)}` : ""}</button>`).join("");
+  chips.querySelectorAll(".chip").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (running) return;
+      getBriefing(btn.dataset.t, btn.dataset.q);
+    });
+  });
+  show(wrap, true);
+}
+$("recent-briefings-clear").addEventListener("click", () => {
+  try {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith("ame_briefing_")) keys.push(k);
+    }
+    keys.forEach((k) => localStorage.removeItem(k));
+  } catch { /* cache is best-effort */ }
+  renderRecentBriefings();
+});
+renderRecentBriefings();
 
 // Shareable briefing links: ?ticker=INTC runs that briefing on load,
 // with ?quarter=Q2%202026 when the link names an older quarter.

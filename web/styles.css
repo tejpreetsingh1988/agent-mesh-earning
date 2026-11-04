@@ -274,6 +274,8 @@ table.analyst-table td.detail-cell { color: #3f3f46; font-size: 13px; }
 .recent-searches { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.75rem; }
 .recent-searches .label { margin: 0; }
 #recent-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+#recent-briefing-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+#recent-briefings-clear { margin-top: 0; margin-left: auto; }
 
 /* Cached-briefing banner (Batch 2): names the save time and quarter. */
 .briefing-actions { margin-bottom: 1rem; }
