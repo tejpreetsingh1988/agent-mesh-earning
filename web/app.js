@@ -574,6 +574,30 @@ function addLog(text) {
   $("log-now").textContent = `Now: ${text}`;
 }
 
+// Terminal Critic refusal (attempt 2 FAIL): the Critic card takes
+// the failed state with the final reasons, the Analyst keeps its
+// done state (it did the work; its claims were refused), and the
+// banner says plainly that nothing was published — instead of
+// the old shape, where the Analyst looked crashed and the Critic
+// sat on "Revising" forever.
+function showCriticFail(ticker, issues) {
+  setBody("critic",
+    `<p class="agent-fail">Final attempt — FAIL. No briefing published.</p>`
+    + (issues.length
+      ? `<ul class="list">${issues.map((i) => `<li>${esc(issueText(i))}</li>`).join("")}</ul>`
+      : ""));
+  setStatus("critic", "failed", "");
+  setStatus("analyst", "done", "");
+  workingAgent = null;
+  setConductor("Conductor — Pipeline Lead", "Pipeline stopped: the Critic refused to publish.");
+  setLoop("conductor", "Critic refused to publish.");
+  addHandover("Critic → Conductor: FAIL, briefing stopped");
+  $("error-msg").textContent = `No briefing was published for ${ticker}: the Critic found problems `
+    + `in the numbers (listed on the Critic card) and refused to approve them. That refusal is `
+    + `the gate working, not a crash. Try another company, or try this one again later.`;
+  show($("error"), true);
+}
+
 function showBriefingError(ticker, message) {
   $("error-msg").textContent = `Could not build a briefing for ${ticker}.\n${message}\n\n`
     + `If this says Critic FAIL, the agents disagreed about a number and refused to publish — `
@@ -616,10 +640,14 @@ async function runStream(ticker) {
             return true;
           }
           if (ev.event === "error") {
-            if (workingAgent) setStatus(workingAgent, "failed", "");
             stopElapsed();
-            setConductor("Conductor — Pipeline Lead", "Pipeline stopped with an error.");
-            showBriefingError(ticker, ev.error || "Stream failed");
+            if (ev.verdict === "FAIL") {
+              showCriticFail(ticker, ev.issues || []);
+            } else {
+              if (workingAgent) setStatus(workingAgent, "failed", "");
+              setConductor("Conductor — Pipeline Lead", "Pipeline stopped with an error.");
+              showBriefingError(ticker, ev.error || "Stream failed");
+            }
             return true;
           }
           onStreamEvent(ev, ticker);
