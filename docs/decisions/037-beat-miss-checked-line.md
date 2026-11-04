@@ -36,3 +36,22 @@ existed in the page's data; they just were not surfaced.
 - The checked line's seconds are wall-clock run time
   (stream + fallback when the fallback ran), the same total
   the conductor strip shows — never a per-agent sum.
+
+## Verification fix (Nov 4, 2026)
+Live verification found the badge missing on a fresh DUOL
+briefing that HAS a consensus claim ("EPS vs consensus …
+-1.8% ($0.54 vs $0.55)"), while the checked line worked —
+so the Batch 19 code was live and the badge's parse was
+wrong, not the deployment. Root cause: the shared
+"reported vs forecast" regex `/([\d.]+)\s*vs\s*([\d.]+)/`
+cannot match a detail like "$0.54 vs $0.55", because the
+second "$" is not a digit, dot, or space — the match fails
+and both the badge and the EPS chart (which uses the same
+regex) silently show nothing. The pre-existing chart bug
+surfaced with the badge because they share the parse.
+Fix: both sites now use
+`/\$?([\d.]+)\s*vs\s*\$?([\d.]+)/`, which parses the DUOL
+detail to 0.54 vs 0.55 ("▼ EPS miss", agreeing with the
+story) and still matches $-free details. The MSFT run in
+the same verification had no consensus claim at all, so
+its badge was correctly hidden — that part was not a bug.
