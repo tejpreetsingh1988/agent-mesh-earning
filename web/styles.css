@@ -338,3 +338,28 @@ table.analyst-table td.detail-cell { color: #3f3f46; font-size: 13px; }
 [data-theme="dark"] .agent-card[data-agent="critic"] { --agent-tint: #451a03; }
 [data-theme="dark"] .agent-card[data-agent="writer"] { --agent-tint: #2e1065; }
 [data-theme="dark"] .cache-banner { background: #27272a; border-color: #3f3f46; }
+
+/* Print (Batch 17): the briefing article is the document. Search,
+   rails, workflow UI, and buttons never print; the article, any
+   comparison, and the footer disclaimer do. Dark mode is forced
+   back to light tokens so print never yields light text on white
+   paper — including the dark overrides, which the print rules
+   below re-override at equal-or-higher specificity. */
+@media print {
+  html[data-theme="dark"] {
+    --background: #ffffff; --foreground: #000000; --card: #ffffff; --card-foreground: #000000;
+    --muted: #f4f4f5; --muted-foreground: #52525b; --border: #d4d4d8; --input: #d4d4d8;
+    --primary: #000000; --primary-foreground: #ffffff; --secondary: #f4f4f5; --secondary-foreground: #000000;
+  }
+  #bg-particles, .search-card, .compare-box, .rail, #agents, #log, #error,
+  .briefing-actions, #quarter-picker, .theme-toggle, .cache-banner { display: none !important; }
+  .shell { padding: 0; max-width: none; }
+  .layout { display: block; margin-top: 0; }
+  .page-head .page-sub, .hero-steps { display: none; }
+  .card, .agent-card { box-shadow: none; border-color: #d4d4d8; }
+  [data-theme="dark"] .story p, [data-theme="dark"] .agent-body .story p { color: #000; }
+  [data-theme="dark"] .agent-pass { color: #15803d; }
+  [data-theme="dark"] .agent-fail, [data-theme="dark"] .alert-title { color: #991b1b; }
+  [data-theme="dark"] .alert-msg { color: #7f1d1d; }
+  a { color: inherit; }
+}
