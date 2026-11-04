@@ -193,6 +193,13 @@
           <span class="label">Earlier quarters</span>
           <span id="quarter-buttons"></span>
         </div>
+        <div id="compare-box" class="compare-box">
+          <span class="label">Compare with</span>
+          <input id="compare-search" type="text" maxlength="100" autocomplete="off" spellcheck="false" placeholder="e.g. Nvidia, Costco, or NVDA">
+          <div id="compare-results" class="search-results" hidden></div>
+          <p id="compare-note" class="hint" hidden></p>
+          <p class="hint">Picks from the company directory. The second briefing runs for the same quarter as this one.</p>
+        </div>
 
         <section class="card">
           <h3>Verified claims</h3>
@@ -231,6 +238,16 @@
           <ul id="b-notes" class="list muted-list"></ul>
         </section>
       </article>
+
+      <section id="comparison" class="card" hidden>
+        <h3 id="comparison-title"></h3>
+        <p id="comparison-quarters" class="body-text"></p>
+        <div id="comparison-verdicts" class="compare-verdicts"></div>
+        <h4>Headline</h4>
+        <div id="comparison-headline"></div>
+        <h4>All claims</h4>
+        <div id="comparison-table"></div>
+      </section>
     </main>
 
     <!-- RIGHT RAIL: charts + at-a-glance, filled only from streamed data -->

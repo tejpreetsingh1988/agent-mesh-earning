@@ -623,7 +623,7 @@ function showBriefingError(ticker, message) {
 // Returns true when the stream spoke (briefing rendered or an
 // error event shown) and false when it failed before any event,
 // which is the only case that falls back to POST.
-async function runStream(ticker, quarter = "") {
+async function runStream(ticker, quarter = "", onBriefing = null) {
   const q = quarter ? `&quarter=${encodeURIComponent(quarter)}` : "";
   const resp = await fetch(`${ORCHESTRATOR_URL}/tasks/stream?ticker=${encodeURIComponent(ticker)}${q}`);
   if (!resp.ok || !resp.body) return false;
@@ -647,6 +647,7 @@ async function runStream(ticker, quarter = "") {
           if (ev.event === "briefing") {
             render(ev.briefing);
             saveBriefingCache(ev.briefing, quarter);
+            if (onBriefing) onBriefing(ev.briefing);
             const total = ((Date.now() - runStartedAt) / 1000).toFixed(1);
             stopElapsed(`Done in ${total}s`);
             setConductor("Conductor — Pipeline Lead", `Briefing complete in ${total}s.`);
@@ -693,7 +694,7 @@ async function runStream(ticker, quarter = "") {
   return false;
 }
 
-async function runPost(ticker, quarter = "") {
+async function runPost(ticker, quarter = "", onBriefing = null) {
   const payload = { ticker };
   if (quarter) payload.quarter = quarter;
   const resp = await fetch(`${ORCHESTRATOR_URL}/tasks/send`, {
@@ -707,6 +708,7 @@ async function runPost(ticker, quarter = "") {
   }
   render(body.result);
   saveBriefingCache(body.result, quarter);
+  if (onBriefing) onBriefing(body.result);
 }
 
 // The ticker box is gone (Nov 2, 2026): the company search is
@@ -773,11 +775,14 @@ function setQuarterButtonsDisabled(disabled) {
   document.querySelectorAll("#quarter-picker button").forEach((b) => { b.disabled = disabled; });
 }
 
-async function getBriefing(ticker, quarter = "") {
+async function getBriefing(ticker, quarter = "", onDone = null) {
   ticker = String(ticker || "").trim().toUpperCase();
   quarter = String(quarter || "").trim();
   if (!/^Q[1-4] \d{4}$/.test(quarter)) quarter = "";
   if (!ticker || running) return;
+  // A new run replaces any comparison view; a compare run
+  // rebuilds it through onDone after its briefing renders.
+  show($("comparison"), false);
   // Shareable link: the URL always names the briefing being run,
   // plus its quarter when it is not the latest.
   try {
@@ -798,12 +803,14 @@ async function getBriefing(ticker, quarter = "") {
     show($("agents"), false);
     show($("log"), false);
     show($("error"), false);
-    showCacheBanner(ticker, cached, quarter);
+    if (onDone) onDone(cached.briefing);
+    else showCacheBanner(ticker, cached, quarter);
     return;
   }
   hideCacheBanner();
   running = true;
   $("company-go").disabled = true;
+  $("compare-search").disabled = true;
   setQuarterButtonsDisabled(true);
   show($("briefing"), false);
   show($("error"), false);
@@ -818,7 +825,7 @@ async function getBriefing(ticker, quarter = "") {
   try {
     let streamed;
     try {
-      streamed = await runStream(ticker, quarter);
+      streamed = await runStream(ticker, quarter, onDone);
     } catch (e) {
       streamed = false;
     }
@@ -826,7 +833,7 @@ async function getBriefing(ticker, quarter = "") {
       setConductor("Conductor — Pipeline Lead",
         "Live stream did not speak; showing the final briefing only.");
       try {
-        await runPost(ticker, quarter);
+        await runPost(ticker, quarter, onDone);
         stopElapsed();
       } catch (e) {
         stopElapsed();
@@ -836,6 +843,7 @@ async function getBriefing(ticker, quarter = "") {
   } finally {
     stopElapsed($("conductor-time").textContent || undefined);
     $("company-go").disabled = false;
+    $("compare-search").disabled = false;
     setQuarterButtonsDisabled(false);
     running = false;
   }
@@ -953,6 +961,116 @@ function renderQuarterPicker(label) {
     btn.addEventListener("click", () => getBriefing(currentTicker, btn.dataset.q));
   });
   show(wrap, true);
+}
+
+// Peer comparison (Batch 8): pure helpers over briefing claim
+// lists. Values shown are the backend's own claim values
+// (parseClaim's rounded display value) — the frontend computes
+// no numbers, it only aligns two briefings' claims by metric.
+function claimValueMap(claims) {
+  const map = new Map();
+  (claims || []).forEach((c) => {
+    const p = parseClaim(c);
+    // Value plus its direction arrow: parseClaim's value drops the
+    // "+" (the Analyst table shows direction via the arrow), but a
+    // standalone comparison table needs the direction in the cell.
+    if (!map.has(p.metric)) map.set(p.metric, p.value + (p.arrow || ""));
+  });
+  return map;
+}
+
+function alignClaims(baseClaims, secondClaims) {
+  const b = claimValueMap(baseClaims);
+  const s = claimValueMap(secondClaims);
+  return [...new Set([...b.keys(), ...s.keys()])].map((metric) => ({
+    metric,
+    base: b.has(metric) ? b.get(metric) : "—",
+    second: s.has(metric) ? s.get(metric) : "—",
+  }));
+}
+
+function headlineValue(claims, test) {
+  const map = claimValueMap(claims);
+  for (const [metric, value] of map) {
+    if (test(metric)) return value;
+  }
+  return "—";
+}
+
+function compareTableHtml(baseTicker, secondTicker, rows) {
+  const head = `<tr><th>Metric</th><th class="num">${esc(baseTicker)}</th><th class="num">${esc(secondTicker)}</th></tr>`;
+  const body = rows.map((r) =>
+    `<tr><td>${esc(r.metric)}</td><td class="num">${esc(r.base)}</td><td class="num">${esc(r.second)}</td></tr>`).join("");
+  return `<table class="compare-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+function renderComparison(base, second) {
+  const sec = $("comparison");
+  if (!sec || !base || !second) return;
+  const sameQuarter = base.quarter_label === second.quarter_label;
+  $("comparison-title").textContent = `Head to head: ${base.ticker} vs ${second.ticker}`;
+  $("comparison-quarters").textContent = sameQuarter
+    ? `Both briefings are for ${base.quarter_label}. Figures are each briefing's verified claims.`
+    : `Warning: quarters differ (${base.quarter_label} vs ${second.quarter_label}) — figures are not like-for-like.`;
+  $("comparison-verdicts").innerHTML =
+    `<div><span class="badge badge-primary">${esc(base.ticker)}</span><p class="body-text">${esc(base.verdict)}</p></div>`
+    + `<div><span class="badge badge-primary">${esc(second.ticker)}</span><p class="body-text">${esc(second.verdict)}</p></div>`;
+  const headlineRows = [
+    { metric: "Revenue YoY growth",
+      base: headlineValue(base.table, (m) => m === "Revenue YoY growth"),
+      second: headlineValue(second.table, (m) => m === "Revenue YoY growth") },
+    { metric: "Operating margin",
+      base: headlineValue(base.table, (m) => m === "Operating margin"),
+      second: headlineValue(second.table, (m) => m === "Operating margin") },
+    { metric: "EPS vs consensus",
+      base: headlineValue(base.table, (m) => m.includes("vs consensus")),
+      second: headlineValue(second.table, (m) => m.includes("vs consensus")) },
+  ];
+  $("comparison-headline").innerHTML = compareTableHtml(base.ticker, second.ticker, headlineRows);
+  $("comparison-table").innerHTML = compareTableHtml(
+    base.ticker, second.ticker, alignClaims(base.table, second.table));
+  show(sec, true);
+}
+
+function startCompare(secondTicker) {
+  const base = lastBriefing;
+  if (!base) return;
+  const second = String(secondTicker || "").trim().toUpperCase();
+  const note = $("compare-note");
+  if (!second) return;
+  if (second === base.ticker) {
+    if (note) {
+      note.textContent = "That's the company already shown — pick a different one.";
+      show(note, true);
+    }
+    return;
+  }
+  if (note) show(note, false);
+  const box = $("compare-results");
+  if (box) show(box, false);
+  // Same quarter as the base briefing, so the comparison is
+  // like-for-like; an unparseable base label means latest.
+  const m = /^Q[1-4] \d{4}$/.exec(base.quarter_label || "");
+  getBriefing(second, m ? base.quarter_label : "", (b) => renderComparison(base, b));
+}
+
+function renderCompareResults(matches) {
+  const box = $("compare-results");
+  if (!matches.length) {
+    box.innerHTML = `<p class="search-empty">No company matched — try a different spelling, or a ticker like NVDA.</p>`;
+  } else {
+    box.innerHTML = matches.map((m) =>
+      `<button type="button" class="chip search-match" data-ticker="${esc(m.ticker)}">`
+      + `${esc(m.name)} (${esc(m.ticker)})</button>`).join("");
+    box.querySelectorAll(".search-match").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        show(box, false);
+        $("compare-search").value = "";
+        startCompare(btn.dataset.ticker);
+      });
+    });
+  }
+  show(box, true);
 }
 
 function render(b) {
@@ -1162,6 +1280,22 @@ $("company-search").addEventListener("input", async (e) => {
   ).slice(0, 5);
   if (!matches.length) { show(box, false); return; }
   renderSearchResults(matches, e.target.value.trim());
+});
+
+// Compare picker: same local directory, instant matches only.
+// Deliberately not logged to the search log — a compare pick is
+// not a briefing search, and it should not feed "most searched".
+$("compare-search").addEventListener("input", async (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  const box = $("compare-results");
+  if (q.length < 2) { show(box, false); return; }
+  const dir = await loadDirectory();
+  if ($("compare-search").value.trim().toLowerCase() !== q) return;
+  const matches = dir.filter((c) =>
+    c.name.toLowerCase().includes(q) || c.ticker.toLowerCase().includes(q),
+  ).slice(0, 5);
+  if (!matches.length) { show(box, false); return; }
+  renderCompareResults(matches);
 });
 
 // Recent searches strip: what other visitors searched for, from
