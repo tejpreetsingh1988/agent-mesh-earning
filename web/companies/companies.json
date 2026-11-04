@@ -402,5 +402,37 @@
   {
     "name": "Datadog, Inc.",
     "ticker": "DDOG"
+  },
+  {
+    "name": "Roblox Corporation",
+    "ticker": "RBLX"
+  },
+  {
+    "name": "Marriott International, Inc.",
+    "ticker": "MAR"
+  },
+  {
+    "name": "Hilton Worldwide Holdings Inc.",
+    "ticker": "HLT"
+  },
+  {
+    "name": "Chipotle Mexican Grill, Inc.",
+    "ticker": "CMG"
+  },
+  {
+    "name": "The Kroger Co.",
+    "ticker": "KR"
+  },
+  {
+    "name": "NextEra Energy, Inc.",
+    "ticker": "NEE"
+  },
+  {
+    "name": "The Southern Company",
+    "ticker": "SO"
+  },
+  {
+    "name": "Duke Energy Corporation",
+    "ticker": "DUK"
   }
 ]
