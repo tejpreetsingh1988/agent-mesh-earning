@@ -49,3 +49,18 @@ search box makes saved briefings one tap away.
   keys and re-hides the strip, list caps at 8.
 - Live verification pending: upload, then a browser check that a
   saved briefing appears in the strip and restores instantly on click.
+
+## Addendum — Clear fix (found live, same day)
+
+Live verification passed the strip, instant restore, and new-entry
+cases, but Clear failed: the keys were deleted, yet the chips,
+heading, and Clear button stayed on screen — and after reload the
+empty heading + button still showed. Root cause: the strip's
+`display: flex` author rule beats the browser's built-in `[hidden]`
+rule, so setting `hidden = true` did not hide anything; the stale
+chips were also never cleared. Fix: the empty path now clears
+`chips.innerHTML` as well as hiding, and styles.css gains an explicit
+`.recent-searches[hidden], .quarter-picker[hidden] { display: none; }`
+rule (the quarter picker shares the same latent defect: it also uses
+`display: flex` + the `hidden` attribute). Harness extended to 11
+checks (stale chips removed). Re-verification of Clear pending.
