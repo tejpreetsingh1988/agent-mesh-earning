@@ -32,7 +32,7 @@ from fastapi.responses import StreamingResponse
 
 from mesh.agent_app import create_app
 from mesh.auth import auth_headers
-from mesh.orchestrator_async import run_briefing_async
+from mesh.orchestrator_async import error_event, run_briefing_async
 from mesh.worker_http import post_json
 
 URLS = {
@@ -103,7 +103,7 @@ async def tasks_stream(ticker: str = ""):
             await queue.put({"event": "briefing",
                              "briefing": briefing.model_dump(mode="json")})
         except Exception as e:
-            await queue.put({"event": "error", "error": str(e)})
+            await queue.put(error_event(e))
         finally:
             await queue.put(None)
 
