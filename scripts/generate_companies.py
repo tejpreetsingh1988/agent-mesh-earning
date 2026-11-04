@@ -34,7 +34,7 @@ PAGE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{name} ({ticker}) — Agent Mesh earnings briefings</title>
+<title>{name} ({ticker}) — Earnings Ledger</title>
 <link rel="stylesheet" href="../styles.css">
 </head>
 <body>
@@ -45,7 +45,7 @@ PAGE = """<!DOCTYPE html>
   revenue, margins, and earnings-per-share from SEC filings, checked
   by the Critic agent before the story is written. US large-cap,
   most recent reported quarter.</p>
-  <p><a href="../index.html">Back to Agent Mesh earnings briefings</a></p>
+  <p><a href="../index.html">Back to Earnings Ledger</a></p>
 </main>
 </body>
 </html>
@@ -56,13 +56,13 @@ INDEX_HEAD = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Company directory — Agent Mesh earnings briefings</title>
+<title>Company directory — Earnings Ledger</title>
 <link rel="stylesheet" href="../styles.css">
 </head>
 <body>
 <main class="container">
   <h1>Company directory</h1>
-  <p>US large-caps with earnings briefings on Agent Mesh. Search by
+  <p>US large-caps with earnings briefings on Earnings Ledger. Search by
   company name on the home page, or pick a company below.</p>
   <ul>
 """
