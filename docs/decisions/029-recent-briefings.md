@@ -63,4 +63,8 @@ chips were also never cleared. Fix: the empty path now clears
 `.recent-searches[hidden], .quarter-picker[hidden] { display: none; }`
 rule (the quarter picker shares the same latent defect: it also uses
 `display: flex` + the `hidden` attribute). Harness extended to 11
-checks (stale chips removed). Re-verification of Clear pending.
+checks (stale chips removed). Fix uploaded 789039c (web) + 940a816
+(ADR). RE-VERIFICATION PASS Nov 4, 2026: AAPL run 29.5s → strip
+showed "AAPL Q3 2026" → Clear removed the whole strip immediately
+(no reload) → reload confirmed it stays gone. Batch 11 DONE +
+VERIFIED.
