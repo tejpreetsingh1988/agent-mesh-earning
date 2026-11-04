@@ -1011,7 +1011,7 @@ function briefingMarkdown(b) {
     lines.push(`Source: ${s.publisher || "Source"}${s.url ? ` (${s.url})` : ""}`);
   });
   lines.push(`Trace: ${b.trace_id || "—"}`);
-  lines.push(`Exported ${new Date().toLocaleString()} from agent-mesh-earnings.pages.dev.`);
+  lines.push(`Exported ${new Date().toLocaleString()} from earningsbrief.pages.dev.`);
   lines.push("Educational demo, not investment advice. No buy, sell, or hold recommendation.");
   return lines.join("\n") + "\n";
 }
