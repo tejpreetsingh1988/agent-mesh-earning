@@ -272,6 +272,10 @@ table.analyst-table td.detail-cell { color: #3f3f46; font-size: 13px; }
 
 /* Recent searches strip (Batch 1 UX): chips row under the search box. */
 .recent-searches { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.75rem; }
+/* Author display:flex beats the UA [hidden] rule, so a hidden flex
+   strip would still show without this (found live: Clear hid the
+   keys but the empty strip stayed visible). Same for the picker. */
+.recent-searches[hidden], .quarter-picker[hidden] { display: none; }
 .recent-searches .label { margin: 0; }
 #recent-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 #recent-briefing-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }

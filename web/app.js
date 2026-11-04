@@ -1497,7 +1497,14 @@ function renderRecentBriefings() {
   const chips = $("recent-briefing-chips");
   if (!wrap || !chips) return;
   const items = listCachedBriefings();
-  if (!items.length) { show(wrap, false); return; }
+  if (!items.length) {
+    // Clear stale chips too: with display:flex the hidden attribute
+    // alone would not hide this strip (see the CSS note), so an
+    // empty strip must not leave old chips behind either.
+    chips.innerHTML = "";
+    show(wrap, false);
+    return;
+  }
   chips.innerHTML = items.map((it) =>
     `<button type="button" class="chip" data-t="${esc(it.ticker)}" data-q="${esc(it.quarter)}">${esc(it.ticker)}${it.label ? ` · ${esc(it.label)}` : ""}</button>`).join("");
   chips.querySelectorAll(".chip").forEach((btn) => {
