@@ -273,9 +273,21 @@ table.analyst-table td.detail-cell { color: #3f3f46; font-size: 13px; }
 .quarter-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
 .quarter-picker .label { font-size: 13px; color: var(--muted-foreground); }
 .quarter-picker .btn-secondary { margin-top: 0; }
-.compare-box { margin-bottom: 1rem; }
+.compare-box { margin-top: 1rem; margin-bottom: 1rem; border-top: 1px solid var(--border); padding-top: 1rem; }
 .compare-box .label { display: block; font-size: 14px; font-weight: 500; margin-bottom: 8px; }
+.compare-box input { width: 100%; height: 44px; padding: 0 12px; font: inherit; font-size: 14px; color: var(--foreground); background: var(--card); border: 1px solid var(--input); border-radius: calc(var(--radius) - 4px); }
 .compare-verdicts { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+.compare-verdict { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }
+.compare-verdict-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+#comparison h4 { font-size: 13px; font-weight: 600; color: var(--muted-foreground); margin: 1rem 0 0.5rem; }
+#comparison-quarters { font-size: 13px; color: var(--muted-foreground); }
+#b-logo { display: inline-flex; }
+.logo-img { object-fit: contain; border-radius: 4px; flex: none; }
+.logo-chip { width: 20px; height: 20px; }
+.logo-header, .logo-verdict { width: 28px; height: 28px; }
+.logo-initials { display: inline-flex; align-items: center; justify-content: center; background: var(--muted); color: var(--muted-foreground); font-size: 10px; font-weight: 600; border-radius: 4px; flex: none; }
+.logo-header.logo-initials, .logo-verdict.logo-initials { font-size: 12px; }
+.search-match { display: inline-flex; align-items: center; gap: 6px; }
 .compare-table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
 .compare-table th, .compare-table td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 14px; }
 .compare-table th.num, .compare-table td.num { text-align: right; font-variant-numeric: tabular-nums; }

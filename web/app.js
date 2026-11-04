@@ -1017,8 +1017,8 @@ function renderComparison(base, second) {
     ? `Both briefings are for ${base.quarter_label}. Figures are each briefing's verified claims.`
     : `Warning: quarters differ (${base.quarter_label} vs ${second.quarter_label}) — figures are not like-for-like.`;
   $("comparison-verdicts").innerHTML =
-    `<div><span class="badge badge-primary">${esc(base.ticker)}</span><p class="body-text">${esc(base.verdict)}</p></div>`
-    + `<div><span class="badge badge-primary">${esc(second.ticker)}</span><p class="body-text">${esc(second.verdict)}</p></div>`;
+    `<div class="compare-verdict"><div class="compare-verdict-head">${logoImg(base.ticker, "logo-img logo-verdict")}<span class="badge badge-primary">${esc(base.ticker)}</span></div><p class="body-text">${esc(base.verdict)}</p></div>`
+    + `<div class="compare-verdict"><div class="compare-verdict-head">${logoImg(second.ticker, "logo-img logo-verdict")}<span class="badge badge-primary">${esc(second.ticker)}</span></div><p class="body-text">${esc(second.verdict)}</p></div>`;
   const headlineRows = [
     { metric: "Revenue YoY growth",
       base: headlineValue(base.table, (m) => m === "Revenue YoY growth"),
@@ -1068,7 +1068,7 @@ function renderCompareResults(matches) {
   } else {
     box.innerHTML = matches.map((m) =>
       `<button type="button" class="chip search-match" data-ticker="${esc(m.ticker)}">`
-      + `${esc(m.name)} (${esc(m.ticker)})</button>`).join("");
+      + `${logoImg(m.ticker, "logo-img logo-chip")}${esc(m.name)} (${esc(m.ticker)})</button>`).join("");
     box.querySelectorAll(".search-match").forEach((btn) => {
       btn.addEventListener("click", () => {
         show(box, false);
@@ -1084,6 +1084,7 @@ function render(b) {
   lastBriefing = b;
   renderQuarterPicker(b.quarter_label);
   $("b-ticker").textContent = b.ticker;
+  $("b-logo").innerHTML = logoImg(b.ticker, "logo-img logo-header");
   $("b-quarter").textContent = b.quarter_label;
   $("b-verdict").textContent = b.verdict;
   // Claim values are percentages; the raw float (8.868501529051978)
@@ -1193,6 +1194,28 @@ function matchFromItem(item) {
   return { ticker, name };
 }
 
+// Company logos (Batch 10): Parqet's ticker-keyed logo
+// endpoint — no key, no domain mapping, crisp SVG for
+// every directory ticker tested (AAPL, DDOG, RBLX, KR,
+// SO, NEE, MAR, HLT, CMG, DUK all 200). An unknown
+// ticker 404s cleanly, so onerror swaps in a muted
+// initials tile instead of a broken image — the page
+// never shows a missing-logo icon.
+function logoUrl(ticker) {
+  return `https://assets.parqet.com/logos/symbol/${encodeURIComponent(ticker)}`;
+}
+
+function logoImg(ticker, cls) {
+  return `<img src="${logoUrl(ticker)}" alt="" class="${cls}" loading="lazy" onerror="logoFallback(this, '${esc(ticker)}')">`;
+}
+
+function logoFallback(img, ticker) {
+  const span = document.createElement("span");
+  span.className = img.className.replace("logo-img", "logo-initials");
+  span.textContent = ticker.slice(0, 2);
+  img.replaceWith(span);
+}
+
 function renderSearchResults(matches, query) {
   const box = $("company-results");
   if (!matches.length) {
@@ -1201,7 +1224,7 @@ function renderSearchResults(matches, query) {
   } else {
     box.innerHTML = matches.map((m) =>
       `<button type="button" class="chip search-match" data-ticker="${esc(m.ticker)}">`
-      + `${esc(m.name)} (${esc(m.ticker)})</button>`).join("");
+      + `${logoImg(m.ticker, "logo-img logo-chip")}${esc(m.name)} (${esc(m.ticker)})</button>`).join("");
     box.querySelectorAll(".search-match").forEach((btn) => {
       btn.addEventListener("click", () => {
         show(box, false);
