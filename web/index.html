@@ -52,38 +52,30 @@
   </section>
 
   <div class="layout">
-    <!-- LEFT RAIL: the live handover loop -->
-    <aside class="rail rail-left" aria-label="Agent handover loop">
-      <section class="card loop-card">
-        <h3>🔁 Agent handover loop</h3>
-        <p class="rail-hint">Live. A packet circles the loop; the active agent glows
-        as the stream hands it the baton. Idle, it keeps circling slowly.</p>
-        <svg class="loop-svg" viewBox="0 0 260 260" role="img" aria-label="Scout to Analyst to Critic to Writer to Conductor and back to Scout">
-          <path id="loop-path" d="M130,30 L232,100 L193,224 L67,224 L28,100 Z" fill="none" stroke="#e4e4e7" stroke-width="3" stroke-linejoin="round"/>
-          <path d="M130,30 L232,100 L193,224 L67,224 L28,100 Z" fill="none" stroke="url(#loopGrad)" stroke-width="3" stroke-linejoin="round" stroke-dasharray="10 8" class="loop-dash"/>
-          <defs>
-            <linearGradient id="loopGrad" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stop-color="#0f766e"/><stop offset="35%" stop-color="#1d4ed8"/>
-              <stop offset="65%" stop-color="#b45309"/><stop offset="100%" stop-color="#6d28d9"/>
-            </linearGradient>
-          </defs>
-          <circle r="7" fill="#0f766e" stroke="#fff" stroke-width="2" class="loop-packet"><animateMotion dur="9s" repeatCount="indefinite" path="M130,30 L232,100 L193,224 L67,224 L28,100 Z"/></circle>
-          <circle r="5" fill="#6d28d9" stroke="#fff" stroke-width="2" class="loop-packet" opacity="0.85"><animateMotion dur="9s" begin="-4.5s" repeatCount="indefinite" path="M130,30 L232,100 L193,224 L67,224 L28,100 Z"/></circle>
-          <g class="loop-node" id="loop-node-scout" data-agent="scout"><circle cx="130" cy="30" r="22" fill="#0f766e"/><text x="130" y="35" text-anchor="middle">S</text></g>
-          <g class="loop-node" id="loop-node-analyst" data-agent="analyst"><circle cx="232" cy="100" r="22" fill="#1d4ed8"/><text x="232" y="105" text-anchor="middle">A</text></g>
-          <g class="loop-node" id="loop-node-critic" data-agent="critic"><circle cx="193" cy="224" r="22" fill="#b45309"/><text x="193" y="229" text-anchor="middle">C</text></g>
-          <g class="loop-node" id="loop-node-writer" data-agent="writer"><circle cx="67" cy="224" r="22" fill="#6d28d9"/><text x="67" y="229" text-anchor="middle">W</text></g>
-          <g class="loop-node" id="loop-node-conductor" data-agent="conductor"><circle cx="28" cy="100" r="22" fill="#18181b"/><text x="28" y="105" text-anchor="middle">◆</text></g>
-          <text x="130" y="130" text-anchor="middle" class="loop-center" id="loop-center">Idle</text>
-          <text x="130" y="148" text-anchor="middle" class="loop-center-sub" id="loop-center-sub">Pick a company</text>
-        </svg>
+    <!-- LEFT RAIL: the handover rail, a straight line, not a loop.
+         Work moves Scout -> Analyst -> Critic -> Writer exactly once;
+         the filled segments are handovers that already happened. -->
+    <aside class="rail rail-left" aria-label="Agent handover rail">
+      <section class="card rail-card">
+        <h3>Who has the baton</h3>
+        <p class="rail-hint">One straight line. Exactly one agent is active at a
+        time; a segment fills only when that handover really happened.</p>
+        <div class="baton-rail" role="list" aria-label="Pipeline steps in order">
+          <div class="baton-step" role="listitem" data-agent="scout"><span class="baton-node" data-letter="S">S</span><span class="baton-label">Scout</span></div>
+          <div class="baton-conn" id="rail-conn-scout-analyst"></div>
+          <div class="baton-step" role="listitem" data-agent="analyst"><span class="baton-node" data-letter="A">A</span><span class="baton-label">Analyst</span></div>
+          <div class="baton-conn" id="rail-conn-analyst-critic"></div>
+          <div class="baton-step" role="listitem" data-agent="critic"><span class="baton-node" data-letter="C">C</span><span class="baton-label">Critic</span></div>
+          <div class="baton-conn" id="rail-conn-critic-writer"></div>
+          <div class="baton-step" role="listitem" data-agent="writer"><span class="baton-node" data-letter="W">W</span><span class="baton-label">Writer</span></div>
+        </div>
         <div class="loop-legend">
           <button type="button" class="loop-leg" data-jump="scout"><span class="dot dot-teal"></span>Scout</button>
           <button type="button" class="loop-leg" data-jump="analyst"><span class="dot dot-blue"></span>Analyst</button>
           <button type="button" class="loop-leg" data-jump="critic"><span class="dot dot-amber"></span>Critic</button>
           <button type="button" class="loop-leg" data-jump="writer"><span class="dot dot-violet"></span>Writer</button>
         </div>
-        <p class="loop-status" id="loop-status">No run yet. The loop idles until a briefing starts.</p>
+        <p class="loop-status" id="loop-status">No run yet. Pick a company to start the pipeline.</p>
         <ul class="handover-feed" id="handover-feed"></ul>
       </section>
 
@@ -91,7 +83,7 @@
         <h3>How to read this page</h3>
         <ul class="list">
           <li><strong>Left:</strong> who has the baton right now.</li>
-          <li><strong>Centre:</strong> the agents&rsquo; own cards, then the full briefing.</li>
+          <li><strong>Centre:</strong> the run ledger — one row per agent, in order — then the full briefing.</li>
           <li><strong>Right:</strong> charts drawn from the same Scout facts and Analyst claims — no new numbers.</li>
         </ul>
         <p class="meta">Click any Analyst row to expand its exact formula. Filter and sort the table without losing the derivation.</p>
@@ -101,11 +93,11 @@
     <!-- CENTRE: agents + briefing (IDs unchanged for app.js) -->
     <main class="main-col">
       <section id="agents" hidden>
-        <div class="conductor card">
+        <div class="conductor card" id="conductor-strip">
           <span class="conductor-dot" id="conductor-dot"></span>
           <div class="conductor-text">
-            <strong id="conductor-status">Conductor — Pipeline Lead</strong>
-            <span id="conductor-detail">Runs the agents in order and enforces the Critic gate.</span>
+            <strong id="conductor-status">Nothing running yet</strong>
+            <span id="conductor-detail">Pick a company — the full plan shows before the first step starts.</span>
           </div>
           <span class="conductor-time" id="conductor-time"></span>
         </div>
@@ -123,6 +115,7 @@
           <p class="agent-accountable">Accountable for: every fact names its source. Nothing is invented.</p>
           <div class="agent-body" data-body><p class="agent-waiting">Waiting for the pipeline to reach Scout.</p></div>
         </article>
+        <div class="handover-line" id="handover-scout-analyst" hidden></div>
 
         <article class="agent-card" id="card-analyst" data-agent="analyst">
           <header class="agent-head">
@@ -137,6 +130,7 @@
           <p class="agent-accountable">Accountable for: every claim shows its arithmetic and period.</p>
           <div class="agent-body" data-body><p class="agent-waiting">Waiting for Scout&rsquo;s facts.</p></div>
         </article>
+        <div class="handover-line" id="handover-analyst-critic" hidden></div>
 
         <article class="agent-card" id="card-critic" data-agent="critic">
           <header class="agent-head">
@@ -151,6 +145,7 @@
           <p class="agent-accountable">Accountable for: nothing ships without its pass. A fail stops the briefing.</p>
           <div class="agent-body" data-body><p class="agent-waiting">Waiting for Analyst&rsquo;s claims.</p></div>
         </article>
+        <div class="handover-line" id="handover-critic-writer" hidden></div>
 
         <article class="agent-card" id="card-writer" data-agent="writer">
           <header class="agent-head">
@@ -165,6 +160,7 @@
           <p class="agent-accountable">Accountable for: every figure traces to a claim or the transcript.</p>
           <div class="agent-body" data-body><p class="agent-waiting">Waiting for Critic&rsquo;s pass.</p></div>
         </article>
+        <div class="handover-line" id="handover-writer-conductor" hidden></div>
       </section>
 
       <section id="log" class="card" hidden>
@@ -177,6 +173,7 @@
       <section id="error" class="alert-error" hidden>
         <p class="alert-title">Could not build a briefing</p>
         <p id="error-msg" class="alert-msg"></p>
+        <button id="error-retry" type="button" class="btn-secondary" hidden>Run again</button>
       </section>
 
       <article id="briefing" hidden>

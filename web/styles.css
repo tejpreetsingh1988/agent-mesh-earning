@@ -78,20 +78,21 @@ body { margin: 0; background: var(--background); color: var(--foreground); font-
 .chip:hover { background: var(--muted); }
 .hint { font-size: 13px; color: var(--muted-foreground); margin: 12px 0 0; }
 
-/* ---- Handover loop (left rail) ---- */
-.loop-card { border-top: 4px solid transparent; border-image: linear-gradient(90deg, #0f766e, #1d4ed8, #b45309, #6d28d9) 1; }
-.loop-svg { width: 100%; height: auto; display: block; }
-.loop-dash { animation: dash-move 2.4s linear infinite; }
-@keyframes dash-move { to { stroke-dashoffset: -36; } }
-.loop-node { cursor: pointer; }
-.loop-node circle { stroke: #fff; stroke-width: 3; transition: filter 0.2s; }
-.loop-node text { fill: #fff; font-size: 15px; font-weight: 800; font-family: var(--font-sans); }
-.loop-node.is-active circle { filter: drop-shadow(0 0 10px currentColor); animation: node-pulse 1.2s ease-in-out infinite; }
-.loop-node.is-done { opacity: 1; }
-.loop-node:not(.is-active):not(.is-done) { opacity: 0.55; }
-@keyframes node-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } }
-.loop-center { font-size: 15px; font-weight: 800; fill: var(--foreground); }
-.loop-center-sub { font-size: 11px; fill: var(--muted-foreground); }
+/* ---- Handover rail (left rail): a straight line, not a loop ---- */
+.baton-rail { display: flex; align-items: flex-start; gap: 0; margin: 14px 0 4px; }
+.baton-step { display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; flex-shrink: 0; }
+.baton-node { width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 800; color: #fff; background: var(--muted-foreground); }
+.baton-step[data-agent="scout"] .baton-node { background: #0f766e; }
+.baton-step[data-agent="analyst"] .baton-node { background: #1d4ed8; }
+.baton-step[data-agent="critic"] .baton-node { background: #b45309; }
+.baton-step[data-agent="writer"] .baton-node { background: #6d28d9; }
+.baton-step:not(.is-active):not(.is-done) { opacity: 0.55; }
+.baton-step.is-active .baton-node { animation: dot-pulse 1.2s ease-in-out infinite; }
+.baton-step.is-done .baton-node { background: #15803d; }
+.baton-label { font-size: 11px; font-weight: 600; color: var(--muted-foreground); }
+.baton-step.is-active .baton-label { color: var(--foreground); }
+.baton-conn { flex: 1; height: 2px; background: var(--border); margin: 13px 2px 0; min-width: 8px; }
+.baton-conn.is-filled { background: var(--foreground); }
 .loop-legend { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .loop-leg { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px; font-weight: 600; background: #fff; border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; cursor: pointer; }
 .loop-leg:hover { background: var(--muted); }
@@ -158,6 +159,7 @@ footer p { margin: 0 0 8px; } footer a { color: var(--foreground); text-underlin
 .agent-card[data-agent="critic"] { --agent: #b45309; --agent-tint: #fffbeb; }
 .agent-card[data-agent="writer"] { --agent: #6d28d9; --agent-tint: #f5f3ff; }
 .conductor { display: flex; align-items: center; gap: 12px; padding: 16px 24px; }
+.conductor.is-alert { border-left: 4px solid #b45309; }
 .conductor-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted-foreground); flex-shrink: 0; }
 .conductor-text { display: flex; flex-direction: column; min-width: 0; }
 .conductor-text strong { font-size: 14px; font-weight: 600; } .conductor-text span { font-size: 13px; color: var(--muted-foreground); }
@@ -173,7 +175,14 @@ footer p { margin: 0 0 8px; } footer a { color: var(--foreground); text-underlin
 .agent-card[data-state="working"] .agent-status { background: var(--agent-tint); color: var(--agent); }
 .agent-card[data-state="done"] .agent-status { background: #f0fdf4; color: #15803d; }
 .agent-card[data-state="revising"] .agent-status { background: #fffbeb; color: #b45309; }
+.agent-card[data-state="gate"] .agent-status { background: #fffbeb; color: #b45309; }
+.agent-card[data-state="queued"] .agent-status { background: var(--muted); color: var(--muted-foreground); }
+.agent-card[data-state="skipped"] .agent-status { background: var(--muted); color: var(--muted-foreground); }
+.agent-card[data-state="paused"] .agent-status { background: var(--muted); color: var(--muted-foreground); }
+.agent-card[data-state="skipped"] { opacity: 0.7; }
 .agent-card[data-state="failed"] .agent-status { background: var(--destructive-bg); color: #991b1b; }
+/* Handover lines between ledger rows: filled only on a real handover. */
+.handover-line { font-size: 12px; color: var(--muted-foreground); padding: 2px 0 2px 4px; margin: 0 0 12px; }
 .agent-time { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted-foreground); white-space: nowrap; padding-top: 3px; }
 .agent-accountable { font-size: 13px; color: var(--muted-foreground); margin: 12px 0 0; }
 .agent-body { margin-top: 16px; }
@@ -245,7 +254,6 @@ table.analyst-table td.detail-cell { color: #3f3f46; font-size: 13px; }
   .layout { grid-template-columns: 1fr; }
   .rail-left, .rail-right { position: static; }
   .rail-left { order: 2; } .main-col { order: 1; } .rail-right { order: 3; }
-  .loop-svg { max-width: 340px; margin: 0 auto; }
 }
 @media (max-width: 560px) {
   .shell { padding: 20px 16px 48px; }
@@ -259,7 +267,7 @@ table.analyst-table td.detail-cell { color: #3f3f46; font-size: 13px; }
   .conductor { padding: 14px 16px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .blob, .loop-dash, .loop-node.is-active circle, .agent-card[data-state="working"] .agent-dot { animation: none !important; }
+  .blob, .baton-step.is-active .baton-node, .agent-card[data-state="working"] .agent-dot { animation: none !important; }
 }
 
 /* Recent searches strip (Batch 1 UX): chips row under the search box. */

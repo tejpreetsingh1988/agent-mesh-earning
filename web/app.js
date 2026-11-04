@@ -360,17 +360,46 @@ function clearCharts() {
 
 const LOOP_ORDER = ["scout", "analyst", "critic", "writer", "conductor"];
 const LOOP_LABEL = { scout: "Scout", analyst: "Analyst", critic: "Critic", writer: "Writer", conductor: "Conductor" };
+const RAIL_CONNS = [
+  ["scout", "analyst", "rail-conn-scout-analyst"],
+  ["analyst", "critic", "rail-conn-analyst-critic"],
+  ["critic", "writer", "rail-conn-critic-writer"],
+];
+// The rail is a straight line, not a loop: exactly one step is
+// active, earlier steps are done, and a segment fills only when
+// that handover really happened. "conductor" means the whole
+// line is done (briefing assembled or pipeline stopped).
 function setLoop(agent, statusText) {
-  LOOP_ORDER.forEach((a) => {
-    const node = $(`loop-node-${a}`);
-    if (!node) return;
-    node.classList.toggle("is-active", a === agent);
-    node.classList.toggle("is-done", agent ? LOOP_ORDER.indexOf(a) < LOOP_ORDER.indexOf(agent) : false);
+  const activeIdx = agent ? LOOP_ORDER.indexOf(agent) : -1;
+  document.querySelectorAll(".baton-step").forEach((step) => {
+    const a = step.dataset.agent;
+    const idx = LOOP_ORDER.indexOf(a);
+    const isDone = activeIdx >= 0 && idx < activeIdx;
+    const isActive = a === agent;
+    step.classList.toggle("is-active", isActive);
+    step.classList.toggle("is-done", isDone);
+    const node = step.querySelector(".baton-node");
+    if (node) node.textContent = isDone ? "✓" : (node.dataset.letter || "");
   });
-  const center = $("loop-center"), sub = $("loop-center-sub"), status = $("loop-status");
-  if (center) center.textContent = agent ? LOOP_LABEL[agent] : "Idle";
-  if (sub) sub.textContent = agent ? "has the baton" : "Pick a company";
-  if (status) status.textContent = statusText || (agent ? `${LOOP_LABEL[agent]} is working.` : "No run yet. The loop idles until a briefing starts.");
+  RAIL_CONNS.forEach(([from, , id]) => {
+    const el = $(id);
+    if (el) el.classList.toggle("is-filled", activeIdx >= 0 && LOOP_ORDER.indexOf(from) < activeIdx);
+  });
+  const status = $("loop-status");
+  if (status) status.textContent = statusText || (agent ? `${LOOP_LABEL[agent]} has the baton.` : "No run yet. Pick a company to start the pipeline.");
+}
+
+// One handover line sits between two ledger rows and is filled
+// only when that handover really happened — never in advance.
+function setHandoverLine(key, text) {
+  const el = $(`handover-${key}`);
+  if (!el) return;
+  el.textContent = text;
+  el.hidden = false;
+}
+
+function tookText(durationMs) {
+  return durationMs ? ` · took ${secs(durationMs)}` : "";
 }
 function addHandover(text) {
   const feed = $("handover-feed");
@@ -432,6 +461,10 @@ function setStatus(agent, state, timeText) {
     : state === "working" ? "Working"
     : state === "failed" ? "Failed"
     : state === "revising" ? "Revising"
+    : state === "queued" ? "Queued"
+    : state === "gate" ? "Stopped by check"
+    : state === "skipped" ? "Skipped"
+    : state === "paused" ? "Paused"
     : "Waiting";
   const t = el.querySelector("[data-time]");
   if (t) t.textContent = timeText || "";
@@ -445,12 +478,12 @@ function setBody(agent, html) {
 
 function resetCards() {
   AGENT_ORDER.forEach((a) => {
-    setStatus(a, "waiting", "");
+    setStatus(a, "queued", "");
     const waiting = {
-      scout: "Waiting for the pipeline to reach Scout.",
-      analyst: "Waiting for Scout\u2019s facts.",
-      critic: "Waiting for Analyst\u2019s claims.",
-      writer: "Waiting for Critic\u2019s pass.",
+      scout: "Queued — runs first.",
+      analyst: "Queued — runs after Scout.",
+      critic: "Queued — runs after Analyst.",
+      writer: "Queued — runs after Critic passes.",
     }[a];
     setBody(a, `<p class="agent-waiting">${waiting}</p>`);
   });
@@ -458,6 +491,11 @@ function resetCards() {
   workingAgent = null;
   const feed = $("handover-feed");
   if (feed) feed.innerHTML = "";
+  document.querySelectorAll(".handover-line").forEach((el) => { el.hidden = true; el.textContent = ""; });
+  const strip = $("conductor-strip");
+  if (strip) strip.classList.remove("is-alert");
+  const retry = $("error-retry");
+  if (retry) retry.hidden = true;
   setLoop(null, "Starting the pipeline.");
   clearCharts();
 }
@@ -493,10 +531,10 @@ function issueText(issue) {
 function onStreamEvent(ev, ticker) {
   const name = ev.event;
   if (name === "scout_started") {
-    setConductor("Conductor — Pipeline Lead", `Scout is fetching filings for ${ticker}.`);
+    setConductor("Now: Scout — fetching filings", "Step 1 of 4 · Next: Analyst · Usually 30–90s");
     setStatus("scout", "working", "");
     workingAgent = "scout";
-    setLoop("scout", "Scout is fetching filings.");
+    setLoop("scout", "Scout has the baton — fetching filings.");
     addHandover("Conductor → Scout: fetch filings");
     return;
   }
@@ -511,10 +549,11 @@ function onStreamEvent(ev, ticker) {
       + pivotTablesHtml(facts)
       + (publishers.length ? `<p class="metric-footnote">Sources: ${esc(publishers.join(", "))}.</p>` : ""));
     setStatus("scout", "done", ev.duration_ms ? `took ${secs(ev.duration_ms)}` : "");
-    setConductor("Conductor — Pipeline Lead", "Scout done. Analyst is computing.");
+    setConductor("Now: Analyst — computing claims", "Step 2 of 4 · Next: Critic");
     setStatus("analyst", "working", "");
     workingAgent = "analyst";
     setLoop("analyst", `Scout handed over ${facts.length} facts.`);
+    setHandoverLine("scout-analyst", `Scout → Analyst · ${facts.length} facts${tookText(ev.duration_ms)}`);
     addHandover(`Scout → Analyst: ${facts.length} facts`);
     return;
   }
@@ -528,10 +567,11 @@ function onStreamEvent(ev, ticker) {
     renderAnalyst("analyst", claims, analystEl, note);
     updateAllCharts();
     setStatus("analyst", "done", ev.duration_ms ? `took ${secs(ev.duration_ms)}` : "");
-    setConductor("Conductor — Pipeline Lead", "Analyst done. Critic is re-checking.");
+    setConductor("Now: Critic — re-checking every number", "Step 3 of 4 · Next: Writer");
     setStatus("critic", "working", "");
     workingAgent = "critic";
     setLoop("critic", `Analyst handed over ${claims.length} claims.`);
+    setHandoverLine("analyst-critic", `Analyst → Critic · ${claims.length} claims${tookText(ev.duration_ms)}`);
     addHandover(`Analyst → Critic: ${claims.length} claims`);
     return;
   }
@@ -543,10 +583,11 @@ function onStreamEvent(ev, ticker) {
         : `<p class="agent-pass">No issues — every claim re-checked and approved.</p>`;
       setBody("critic", body);
       setStatus("critic", "done", ev.duration_ms ? `took ${secs(ev.duration_ms)}` : "");
-      setConductor("Conductor — Pipeline Lead", "Critic passed. Writer is writing.");
+      setConductor("Now: Writer — writing the story", "Step 4 of 4 · Next: briefing");
       setStatus("writer", "working", "");
       workingAgent = "writer";
       setLoop("writer", "Critic passed — Writer has the baton.");
+      setHandoverLine("critic-writer", `Critic → Writer · PASS${tookText(ev.duration_ms)}`);
       addHandover("Critic → Writer: PASS");
     } else {
       setBody("critic",
@@ -556,6 +597,7 @@ function onStreamEvent(ev, ticker) {
       setStatus("analyst", "working", "");
       workingAgent = "analyst";
       setLoop("analyst", "Critic failed the claims — Analyst is revising.");
+      setHandoverLine("analyst-critic", `Critic → Analyst · FAIL, revising (attempt ${ev.attempt})`);
       addHandover("Critic → Analyst: FAIL, revising");
     }
     return;
@@ -565,9 +607,10 @@ function onStreamEvent(ev, ticker) {
       `<div class="story">${storyHtml(ev.story || "")}</div>`
       + `<p class="meta">Story written via: ${esc(ev.story_model || "—")}</p>`);
     setStatus("writer", "done", ev.duration_ms ? `took ${secs(ev.duration_ms)}` : "");
-    setConductor("Conductor — Pipeline Lead", "Writer done. Assembling the briefing.");
+    setConductor("Now: Conductor — assembling the briefing", "Step 4 of 4 · Almost done");
     workingAgent = null;
     setLoop("conductor", "Writer handed the story back to the Conductor.");
+    setHandoverLine("writer-conductor", `Writer → Conductor · story ready${tookText(ev.duration_ms)}`);
     addHandover("Writer → Conductor: story ready");
   }
 }
@@ -588,35 +631,43 @@ function addLog(text) {
   $("log-now").textContent = `Now: ${text}`;
 }
 
-// Terminal Critic refusal (attempt 2 FAIL): the Critic card takes
-// the failed state with the final reasons, the Analyst keeps its
-// done state (it did the work; its claims were refused), and the
-// banner says plainly that nothing was published — instead of
-// the old shape, where the Analyst looked crashed and the Critic
-// sat on "Revising" forever.
+// Terminal Critic refusal (attempt 2 FAIL): the Critic takes
+// the gate state (amber — a check stopped the run, not a crash),
+// the Writer is marked skipped (it never ran), the Analyst keeps
+// its done state (it did the work; its claims were refused), and
+// the banner says plainly that nothing was published.
 function showCriticFail(ticker, issues) {
   setBody("critic",
     `<p class="agent-fail">Final attempt — FAIL. No briefing published.</p>`
     + (issues.length
       ? `<ul class="list">${issues.map((i) => `<li>${esc(issueText(i))}</li>`).join("")}</ul>`
       : ""));
-  setStatus("critic", "failed", "");
+  setStatus("critic", "gate", "");
   setStatus("analyst", "done", "");
+  setStatus("writer", "skipped", "");
   workingAgent = null;
-  setConductor("Conductor — Pipeline Lead", "Pipeline stopped: the Critic refused to publish.");
-  setLoop("conductor", "Critic refused to publish.");
+  setConductor("Stopped by check — Critic refused to publish", "The gate worked, not a crash · No briefing published");
+  setLoop("critic", "Critic refused to publish — Writer skipped.");
+  setHandoverLine("critic-writer", "Critic → Writer · blocked — gate refused to publish");
   addHandover("Critic → Conductor: FAIL, briefing stopped");
+  const strip = $("conductor-strip");
+  if (strip) strip.classList.add("is-alert");
   $("error-msg").textContent = `No briefing was published for ${ticker}: the Critic found problems `
     + `in the numbers (listed on the Critic card) and refused to approve them. That refusal is `
     + `the gate working, not a crash. Try another company, or try this one again later.`;
   show($("error"), true);
 }
 
-function showBriefingError(ticker, message) {
+function showBriefingError(ticker, message, opts = {}) {
   $("error-msg").textContent = `Could not build a briefing for ${ticker}.\n${message}\n\n`
     + `If this says Critic FAIL, the agents disagreed about a number and refused to publish — `
     + `that refusal is the product working. If it says NOT_REPORTED_YET, the company has not `
     + `reported its most recent quarter yet. Otherwise, try again in a minute.`;
+  // Retry only when re-running could change the outcome: a broken
+  // connection, not a server verdict (FAIL / NOT_REPORTED_YET
+  // would just reproduce itself).
+  const retry = $("error-retry");
+  if (retry) retry.hidden = !opts.retry;
   show($("error"), true);
 }
 
@@ -650,8 +701,9 @@ async function runStream(ticker, quarter = "", onBriefing = null) {
             if (onBriefing) onBriefing(ev.briefing);
             const total = ((Date.now() - runStartedAt) / 1000).toFixed(1);
             stopElapsed(`Done in ${total}s`);
-            setConductor("Conductor — Pipeline Lead", `Briefing complete in ${total}s.`);
+            setConductor("Done — briefing ready", `Ready in ${total}s · 4 of 4 steps`);
             setLoop("conductor", `Briefing complete in ${total}s.`);
+            setHandoverLine("writer-conductor", `Writer → Conductor · briefing complete in ${total}s`);
             addHandover("Conductor: briefing complete");
             return true;
           }
@@ -661,7 +713,7 @@ async function runStream(ticker, quarter = "", onBriefing = null) {
               showCriticFail(ticker, ev.issues || []);
             } else {
               if (workingAgent) setStatus(workingAgent, "failed", "");
-              setConductor("Conductor — Pipeline Lead", "Pipeline stopped with an error.");
+              setConductor("Pipeline stopped with an error", "The server reported this run failed");
               showBriefingError(ticker, ev.error || "Stream failed");
             }
             return true;
@@ -673,13 +725,21 @@ async function runStream(ticker, quarter = "", onBriefing = null) {
       }
     }
   } catch (e) {
-    // Stream broke mid-run: the run may still be going
-    // server-side, so surface the failure, never a duplicate POST.
+    // Stream broke mid-run: this is a lost connection, NOT a job
+    // failure. The ledger stays frozen (the working step keeps its
+    // Working state, the rail keeps its baton) and the banner says
+    // so, with a Run again button. No duplicate POST: the run may
+    // still be completing server-side, and a fresh run is the
+    // user's explicit choice, not an automatic retry.
     if (sawEvent) {
-      if (workingAgent) setStatus(workingAgent, "failed", "");
       stopElapsed();
-      setConductor("Conductor — Pipeline Lead", "Live stream stopped mid-run.");
-      showBriefingError(ticker, `Live log stopped mid-run: ${e.message}`);
+      // Frozen, not failed: the working step pauses (its dot stops
+      // pulsing, because only [data-state="working"] animates).
+      if (workingAgent) setStatus(workingAgent, "paused", "");
+      setConductor("Connection lost — live stream stopped", "The run may still be completing on the server · Ledger frozen, not failed");
+      const strip = $("conductor-strip");
+      if (strip) strip.classList.add("is-alert");
+      showBriefingError(ticker, `Live log stopped mid-run: ${e.message}`, { retry: true });
       return true;
     }
     return false;
@@ -688,7 +748,11 @@ async function runStream(ticker, quarter = "", onBriefing = null) {
   // spoke at all, that is the outcome; otherwise fall back.
   if (sawEvent) {
     stopElapsed();
-    showBriefingError(ticker, "Live log ended before the briefing arrived");
+    if (workingAgent) setStatus(workingAgent, "paused", "");
+    setConductor("Connection lost — live stream ended early", "The run may still be completing on the server · Ledger frozen, not failed");
+    const strip = $("conductor-strip");
+    if (strip) strip.classList.add("is-alert");
+    showBriefingError(ticker, "Live log ended before the briefing arrived", { retry: true });
     return true;
   }
   return false;
@@ -820,7 +884,10 @@ async function getBriefing(ticker, quarter = "", onDone = null) {
   logLines = [];
   $("log-list").innerHTML = "";
   $("log-now").textContent = "Now: starting…";
-  setConductor("Conductor — Pipeline Lead", "Starting the pipeline.");
+  // Optimistic plan, rendered in the same tick as the click: the
+  // full 4-step plan is visible before the first stream event
+  // arrives, with an honest time range instead of a point estimate.
+  setConductor("Starting — Scout is first", "Step 1 of 4 · Next: Analyst · Usually 30–90s");
   startElapsed();
   try {
     let streamed;
@@ -830,8 +897,11 @@ async function getBriefing(ticker, quarter = "", onDone = null) {
       streamed = false;
     }
     if (!streamed) {
-      setConductor("Conductor — Pipeline Lead",
-        "Live stream did not speak; showing the final briefing only.");
+      setConductor("Now: final briefing only", "Live stream did not speak — no step-by-step view for this run");
+      AGENT_ORDER.forEach((a) => {
+        setStatus(a, "waiting", "");
+        setBody(a, `<p class="agent-waiting">No step-by-step view — the live stream did not speak, so only the final briefing will appear.</p>`);
+      });
       try {
         await runPost(ticker, quarter, onDone);
         stopElapsed();
@@ -857,6 +927,15 @@ $("log-download").addEventListener("click", () => {
   a.download = `briefing-${currentTicker || "BRIEFING"}-log.txt`;
   a.click();
   URL.revokeObjectURL(a.href);
+});
+
+// "Run again" after a lost connection: an explicit fresh run.
+// It is only ever shown for connection losses, never for a
+// server verdict (FAIL / NOT_REPORTED_YET would just repeat).
+$("error-retry").addEventListener("click", () => {
+  if (running || !currentTicker) return;
+  show($("error"), false);
+  getBriefing(currentTicker, currentQuarter);
 });
 
 let lastBriefing = null;
@@ -1399,7 +1478,7 @@ try {
   }
 } catch { /* a bad share link never breaks the page */ }
 
-// Loop legend + nodes: jump to that agent's card. Background last,
+// Rail steps + legend: jump to that agent's card. Background last,
 // so a CDN failure can never block search or the briefing.
 document.querySelectorAll(".loop-leg").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -1407,10 +1486,9 @@ document.querySelectorAll(".loop-leg").forEach((btn) => {
     if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
   });
 });
-document.querySelectorAll(".loop-node").forEach((node) => {
-  node.addEventListener("click", () => {
-    const agent = node.dataset.agent;
-    const target = agent === "conductor" ? $("agents") : $(`card-${agent}`);
+document.querySelectorAll(".baton-step").forEach((step) => {
+  step.addEventListener("click", () => {
+    const target = $(`card-${step.dataset.agent}`);
     if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
   });
 });
