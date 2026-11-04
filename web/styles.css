@@ -1,9 +1,9 @@
-/* Agent Mesh — wide, colourful edition.
-   Base tokens from shadcn/ui (light, MIT), zinc + Inter, with the
-   landing-page colour the Nov 2 zinc build deliberately left out:
-   a tsParticles canvas + CSS mesh blobs behind, one vivid accent
-   per agent, and charts on the right rail. Cards stay white and
-   readable; colour is never the only carrier of meaning. */
+/* Earnings Ledger — quiet zinc edition.
+   Base tokens from shadcn/ui (light, MIT), zinc + Inter. Colour is
+   restrained: one muted accent per agent, a monochrome particle
+   field behind, charts that reveal only when their data lands.
+   Cards stay white and readable; colour is never the only carrier
+   of meaning. */
 :root {
   --background: #faf9ff;
   --foreground: #09090b;
@@ -29,28 +29,20 @@
 body { margin: 0; background: var(--background); color: var(--foreground); font-family: var(--font-sans); font-size: 15px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 
 /* ---- Background: CSS mesh + tsParticles canvas (fixed, behind everything) ---- */
-.bg-blobs { position: fixed; inset: 0; overflow: hidden; z-index: 0; pointer-events: none; }
-.blob { position: absolute; width: 42vw; height: 42vw; border-radius: 50%; filter: blur(70px); opacity: 0.35; animation: blob-float 22s ease-in-out infinite alternate; }
-.blob-teal { background: #5eead4; left: -10vw; top: -12vw; }
-.blob-blue { background: #93c5fd; right: -8vw; top: 8vh; animation-delay: -6s; }
-.blob-violet { background: #ddd6fe; left: 28vw; bottom: -18vw; animation-delay: -12s; }
-.blob-amber { background: #fde68a; right: 22vw; bottom: 22vh; width: 26vw; height: 26vw; animation-delay: -3s; }
-@keyframes blob-float { from { transform: translate(0,0) scale(1); } to { transform: translate(4vw,-3vh) scale(1.12); } }
 #bg-particles { position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: 0.55; }
 #bg-particles canvas { width: 100% !important; height: 100% !important; }
 
 .shell { position: relative; z-index: 1; max-width: 1440px; margin: 0 auto; padding: 32px 24px 64px; }
 .page-head { padding: 16px 0 24px; }
-.eyebrow { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; color: var(--blue); margin: 0 0 8px; }
+.eyebrow { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; color: var(--muted-foreground); margin: 0 0 8px; }
 .page-head h1 { font-size: 52px; line-height: 1.05; letter-spacing: -0.03em; font-weight: 800; margin: 0 0 10px; }
-.grad-text { background: linear-gradient(90deg, #0f766e, #1d4ed8, #6d28d9, #db2777); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .page-sub { color: #3f3f46; font-size: 16px; line-height: 1.6; margin: 0; max-width: 760px; }
-.hero-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
-.hero-chip { font-size: 13px; font-weight: 600; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border); background: #fff; }
-.chip-teal { color: var(--teal); border-color: #99f6e4; background: #f0fdfa; }
-.chip-blue { color: var(--blue); border-color: #bfdbfe; background: #eff6ff; }
-.chip-amber { color: var(--amber); border-color: #fde68a; background: #fffbeb; }
-.chip-violet { color: var(--violet); border-color: #ddd6fe; background: #f5f3ff; }
+/* Hero steps: one honest line, arrows carry the order. No pills
+   that look clickable but do nothing, no pastel, no gradient. */
+.hero-steps { display: flex; flex-wrap: wrap; align-items: center; margin: 16px 0 0; padding: 0; list-style: none; }
+.hero-steps li { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted-foreground); }
+.hero-steps li + li::before { content: "→"; margin: 0 10px; }
+.hero-steps li strong { color: var(--foreground); font-weight: 600; }
 
 /* ---- Wide 3-column layout: left loop, centre, right charts ---- */
 .layout { display: grid; grid-template-columns: 300px minmax(0, 1fr) 340px; gap: 20px; align-items: start; margin-top: 20px; }
@@ -70,8 +62,8 @@ body { margin: 0; background: var(--background); color: var(--foreground); font-
 .search-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .search-row input { flex: 1; min-width: 160px; height: 44px; padding: 0 12px; font: inherit; font-size: 14px; color: var(--foreground); background: var(--card); border: 1px solid var(--input); border-radius: calc(var(--radius) - 4px); text-transform: uppercase; }
 .search-row input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
-.btn-primary { height: 44px; padding: 0 20px; font: inherit; font-size: 14px; font-weight: 600; color: var(--primary-foreground); background: linear-gradient(90deg, #1d4ed8, #6d28d9); border: 1px solid transparent; border-radius: calc(var(--radius) - 4px); cursor: pointer; white-space: nowrap; }
-.btn-primary:hover { filter: brightness(1.08); }
+.btn-primary { height: 44px; padding: 0 20px; font: inherit; font-size: 14px; font-weight: 600; color: var(--primary-foreground); background: var(--primary); border: 1px solid var(--primary); border-radius: calc(var(--radius) - 4px); cursor: pointer; white-space: nowrap; }
+.btn-primary:hover { background: #000; }
 .btn-primary:disabled { opacity: 0.5; cursor: default; }
 .chips { display: flex; align-items: center; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
 .chip { height: 32px; padding: 0 12px; font: inherit; font-size: 13px; font-weight: 500; color: var(--foreground); background: var(--card); border: 1px solid var(--border); border-radius: calc(var(--radius) - 4px); cursor: pointer; }
@@ -267,7 +259,7 @@ table.analyst-table td.detail-cell { color: #3f3f46; font-size: 13px; }
   .conductor { padding: 14px 16px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .blob, .baton-step.is-active .baton-node, .agent-card[data-state="working"] .agent-dot { animation: none !important; }
+  .baton-step.is-active .baton-node, .agent-card[data-state="working"] .agent-dot { animation: none !important; }
 }
 
 /* Recent searches strip (Batch 1 UX): chips row under the search box. */
@@ -281,7 +273,15 @@ table.analyst-table td.detail-cell { color: #3f3f46; font-size: 13px; }
 #recent-briefing-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 #recent-briefings-clear { margin-top: 0; margin-left: auto; }
 
-/* Cached-briefing banner (Batch 2): names the save time and quarter. */
+/* Charts reveal progressively: on first load the rail holds one
+   quiet note, not four blank cards. The trend card appears when
+   Scout facts land; growth, EPS/margin, and glance appear when
+   Analyst claims land. Same rule as the ledger: show output as it
+   arrives, never blank placeholders up front. */
+.rail-right .chart-card, .rail-right #glance-card { display: none; }
+.rail-right.has-facts #chart-trend-card { display: block; }
+.rail-right.has-claims #chart-growth-card, .rail-right.has-claims #chart-eps-card, .rail-right.has-claims #glance-card { display: block; }
+.rail-right.has-facts #charts-empty-state, .rail-right.has-claims #charts-empty-state { display: none; }
 .briefing-actions { margin-bottom: 1rem; }
 .briefing-actions .btn-secondary { margin-top: 0; }
 .quarter-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }

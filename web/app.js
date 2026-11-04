@@ -1,4 +1,4 @@
-// Frontend for the Agent Mesh earnings briefing.
+// Frontend for the Earnings Ledger earnings briefing.
 // The Orchestrator's SSE stream carries one event per pipeline
 // step, and each event carries that agent's output — so this page
 // renders each agent's card the moment its agent finishes, instead
@@ -297,18 +297,30 @@ function makeChart(id, type, labels, datasets, opts) {
 function updateTrendChart() {
   const tables = pivotFacts(lastScoutFacts);
   const rev = tables.find((t) => t.metric === "total_revenue");
-  if (!rev || !rev.periods.length) { destroyChart("trend"); setChartEmpty("trend", true); return; }
+  if (!rev || !rev.periods.length) {
+    destroyChart("trend"); setChartEmpty("trend", true);
+    const note = $("chart-trend-empty");
+    if (note) note.textContent = "No revenue series in this briefing's facts.";
+    setChartsVisible();
+    return;
+  }
   const labels = rev.periods.map(quarterLabel);
   const data = rev.cells.map((c) => Number.isFinite(c.value) ? c.value : null);
   setChartEmpty("trend", false);
   makeChart("trend", "bar", labels, [{ label: `Revenue (${rev.unit || ""})`.trim(), data,
     backgroundColor: labels.map((_, i) => i === labels.length - 1 ? "#1d4ed8" : "#93c5fd"),
     borderRadius: 6 }]);
+  setChartsVisible();
 }
 function updateGrowthChart() {
   const rows = (lastAnalystClaims || []).map(parseClaim)
     .filter((p) => /yoy/i.test(p.metric) && p.kind !== "other" && p.valueNum !== null);
-  if (!rows.length) { destroyChart("growth"); setChartEmpty("growth", true); return; }
+  if (!rows.length) {
+    destroyChart("growth"); setChartEmpty("growth", true);
+    const note = $("chart-growth-empty");
+    if (note) note.textContent = "No YoY claims in this briefing.";
+    return;
+  }
   setChartEmpty("growth", false);
   const colors = { growth: "#1d4ed8", margin: "#6d28d9", eps: "#b45309", price: "#0f766e", other: "#71717a" };
   makeChart("growth", "bar", rows.map((r) => r.metric.replace(/\s*YoY\s*/i, "")),
@@ -351,11 +363,22 @@ function updateGlance(quarterLabelText) {
 }
 function updateAllCharts(quarterLabelText) {
   updateTrendChart(); updateGrowthChart(); updateEpsAndMarginCharts(); updateGlance(quarterLabelText);
+  setChartsVisible();
 }
 function clearCharts() {
   ["trend", "growth", "eps", "margin"].forEach((id) => { destroyChart(id); setChartEmpty(id, true); });
   lastScoutFacts = []; lastAnalystClaims = [];
   ["glance-quarter", "glance-revenue", "glance-margin", "glance-eps"].forEach((id) => { const el = $(id); if (el) el.textContent = "—"; });
+  setChartsVisible();
+}
+
+// Progressive chart reveal: the rail holds one quiet note until
+// data exists, then shows exactly the cards its data supports.
+function setChartsVisible() {
+  const rail = $("charts-rail");
+  if (!rail) return;
+  rail.classList.toggle("has-facts", (lastScoutFacts || []).length > 0);
+  rail.classList.toggle("has-claims", (lastAnalystClaims || []).length > 0);
 }
 
 const LOOP_ORDER = ["scout", "analyst", "critic", "writer", "conductor"];
@@ -423,8 +446,8 @@ function initBackground() {
     tp.load({ id: "bg-particles", options: {
       fpsLimit: 60, background: { color: { value: "transparent" } },
       particles: { number: { value: 55, density: { enable: true, area: 900 } },
-        color: { value: ["#0f766e", "#1d4ed8", "#6d28d9", "#db2777", "#b45309"] },
-        links: { enable: true, color: "#cbd5e1", distance: 140, opacity: 0.5 },
+        color: { value: ["#a1a1aa"] },
+        links: { enable: true, color: "#d4d4d8", distance: 140, opacity: 0.5 },
         move: { enable: true, speed: 0.6, direction: "none", outModes: "out" },
         opacity: { value: 0.55 }, size: { value: { min: 2, max: 4 } } },
       detectRetina: true } });
@@ -1000,7 +1023,7 @@ $("briefing-download").addEventListener("click", () => {
   const blob = new Blob([briefingMarkdown(b)], { type: "text/markdown" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `Agent-Mesh-${b.ticker}-${quarter}.md`;
+  a.download = `Earnings-Ledger-${b.ticker}-${quarter}.md`;
   a.click();
   URL.revokeObjectURL(a.href);
 });
@@ -1492,6 +1515,16 @@ function listCachedBriefings() {
   items.sort((a, b) => b.savedAt - a.savedAt);
   return items.slice(0, 8);
 }
+// Short chip label for a quarter: "quarter ended 2026-08-30" is
+// too long for a chip, so it reads "Aug 2026". Calendar labels
+// ("Q3 2026") pass through unchanged. Display only — the briefing
+// itself keeps the full label.
+const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function shortQuarterLabel(label) {
+  const m = /^quarter ended (\d{4})-(\d{2})-\d{2}$/.exec(String(label || ""));
+  if (!m) return label || "";
+  return `${SHORT_MONTHS[Number(m[2]) - 1]} ${m[1]}`;
+}
 function renderRecentBriefings() {
   const wrap = $("recent-briefings");
   const chips = $("recent-briefing-chips");
@@ -1506,7 +1539,7 @@ function renderRecentBriefings() {
     return;
   }
   chips.innerHTML = items.map((it) =>
-    `<button type="button" class="chip" data-t="${esc(it.ticker)}" data-q="${esc(it.quarter)}">${esc(it.ticker)}${it.label ? ` · ${esc(it.label)}` : ""}</button>`).join("");
+    `<button type="button" class="chip" data-t="${esc(it.ticker)}" data-q="${esc(it.quarter)}">${esc(it.ticker)}${it.label ? ` · ${esc(shortQuarterLabel(it.label))}` : ""}</button>`).join("");
   chips.querySelectorAll(".chip").forEach((btn) => {
     btn.addEventListener("click", () => {
       if (running) return;
