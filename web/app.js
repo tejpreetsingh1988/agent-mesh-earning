@@ -881,7 +881,7 @@ function setQuarterButtonsDisabled(disabled) {
 async function getBriefing(ticker, quarter = "", onDone = null) {
   ticker = String(ticker || "").trim().toUpperCase();
   quarter = String(quarter || "").trim();
-  if (!/^Q[1-4] \d{4}$/.test(quarter)) quarter = "";
+  if (!/^Q[1-4] \d{4}$/.test(quarter) && !/^quarter ended \d{4}-\d{2}-\d{2}$/.test(quarter)) quarter = "";
   if (!ticker || running) return;
   // A new run replaces any comparison view; a compare run
   // rebuilds it through onDone after its briefing renders.
@@ -1085,14 +1085,35 @@ function prevQuarters(label, count) {
   return out;
 }
 
+// Batch 20 — fiscal quarters: a fiscal label ("quarter ended
+// 2026-07-26") has no computable predecessors — fiscal calendars
+// are irregular (52/53-week years, Sunday/Saturday ends) — so its
+// previous quarters come from the briefing's own Scout facts:
+// real period ends, newest first, excluding the current quarter.
+// The buttons show the short label ("Jul 2026") but carry the
+// full fiscal label, which the backend now accepts.
+function prevFiscalQuarters(label, facts, count) {
+  const m = /^quarter ended (\d{4}-\d{2}-\d{2})$/.exec(label || "");
+  if (!m) return [];
+  const current = m[1];
+  const ends = [...new Set((facts || []).map((f) => f.period).filter((p) =>
+    /^\d{4}-\d{2}-\d{2}$/.test(p || "")))].filter((p) => p < current).sort().reverse();
+  return ends.slice(0, count).map((p) => `quarter ended ${p}`);
+}
+
 function renderQuarterPicker(label) {
   const wrap = $("quarter-picker");
   const btns = $("quarter-buttons");
   if (!wrap || !btns) return;
-  const prev = prevQuarters(label, 3);
+  let prev = prevQuarters(label, 3);
+  let fiscal = false;
+  if (!prev.length) {
+    prev = prevFiscalQuarters(label, lastScoutFacts, 3);
+    fiscal = prev.length > 0;
+  }
   if (!prev.length) { show(wrap, false); return; }
   let html = prev.map((l) =>
-    `<button type="button" class="btn-secondary quarter-btn" data-q="${esc(l)}">${esc(l)}</button>`).join("");
+    `<button type="button" class="btn-secondary quarter-btn" data-q="${esc(l)}">${esc(fiscal ? shortQuarterLabel(l) : l)}</button>`).join("");
   if (currentQuarter) {
     html += `<button type="button" class="btn-secondary quarter-btn" data-q="">Latest quarter</button>`;
   }
