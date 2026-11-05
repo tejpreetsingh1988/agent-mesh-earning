@@ -71,4 +71,5 @@ def write_briefing(pack: EvidencePack, analysis: Analysis, trace_id: str,
         kpis=(kpi_result or {}).get("items", []) if isinstance(kpi_result, dict) else [],
         kpi_source_url=(kpi_result or {}).get("source_url", "") if isinstance(kpi_result, dict) else "",
         diagram=(kpi_result or {}).get("diagram") if isinstance(kpi_result, dict) else None,
+        kpi_debug=(kpi_result or {}).get("debug", {}) if isinstance(kpi_result, dict) else {},
     )

@@ -1,8 +1,15 @@
-"""Batch 34: the Writer runs as three parallel mode calls
+"""Batch 34: the Writer runs as three mode calls
 (story/kpi/fineprint), each its own Worker invocation with its
 own CPU budget, and the Orchestrator assembles the Briefing.
 A single Writer invocation kept dying at exactly 2,010ms CPU
-on GOOGL; the split is what fixes it."""
+on GOOGL; the split is what fixes it.
+
+Batch 42: the three mode calls run SEQUENTIALLY (story, then
+KPI, then fine print), not in parallel — the parallel calls
+contended for the Workers AI free tier, for SEC, and for the
+2,000ms CPU budget (dashboard 503s in clusters at the parallel
+calls' minutes), so the KPI leg returned empty in full runs
+while working alone."""
 import asyncio
 from datetime import date, datetime, timezone
 
@@ -154,3 +161,49 @@ def test_sync_handler_no_mode_still_builds_briefing(monkeypatch):
                            "analysis": _analysis_dict(), "trace_id": "t"})
     assert res["story"] == "Full briefing story."
     assert res["ticker"] == "GOOGL"
+
+
+def test_write_briefing_carries_kpi_debug():
+    # Batch 42: the KPI chain's debug dict rides the briefing so a
+    # full run's KPI outcome is diagnosable from the stream event.
+    from mesh.writer import write_briefing as _wb
+    pack = EvidencePack.model_validate(_pack_dict())
+    analysis = Analysis.model_validate(_analysis_dict())
+    brief = _wb(pack, analysis, "t",
+                story_result={"story": "s", "model": "m"},
+                kpi_result={"items": [], "diagram": None, "source_url": "",
+                            "debug": {"settled_on": "exhausted", "replies": 0,
+                                      "errors": [{"leg": "workers_ai", "error": "TimeoutError: "}]}},
+                fine_print_result={"items": [], "source_urls": []})
+    assert brief.kpi_debug["settled_on"] == "exhausted"
+    assert brief.kpi_debug["replies"] == 0
+
+
+def test_writer_steps_run_sequentially_story_kpi_fineprint(monkeypatch):
+    # Batch 42: the Orchestrator's _writer_steps awaits each mode
+    # call before starting the next — story, then KPI, then fine
+    # print — so the three calls never contend for the model, for
+    # SEC, or for the CPU budget at the same instant.
+    import importlib.util
+    import pathlib
+    spec = importlib.util.spec_from_file_location(
+        "orch_worker_main_steps_test",
+        pathlib.Path(__file__).resolve().parents[2] / "apps" / "orchestrator" / "worker_main.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    order = []
+
+    async def fake_agent_call(agent, payload):
+        order.append(payload["mode"])
+        if payload["mode"] == "story":
+            return {"story_result": {"story": "s", "model": "m"}}
+        if payload["mode"] == "kpi":
+            return {"kpi_result": {"items": [], "diagram": None, "source_url": "",
+                                   "debug": {"settled_on": "items"}}}
+        return {"fine_print_result": {"items": [], "source_urls": []}}
+
+    monkeypatch.setattr(mod, "_agent_call", fake_agent_call)
+    story, kpi, fp = asyncio.run(mod._writer_steps(_pack_dict(), _analysis_dict(), "t"))
+    assert order == ["story", "kpi", "fineprint"]
+    assert story["model"] == "m"
+    assert kpi["debug"]["settled_on"] == "items"

@@ -76,5 +76,10 @@ class Briefing(BaseModel):
     kpis: list[dict] = []
     kpi_source_url: str = ""
     diagram: dict | None = None
+    # Batch 42: the KPI chain's debug dict (fetched_chars,
+    # settled_on, replies, errors, diagram) rides the briefing
+    # so a full run's KPI outcome is diagnosable from the stream
+    # event alone — no dashboard log read needed. Not rendered.
+    kpi_debug: dict = {}
     disclaimer: str = "Informational only. Not investment advice."
     trace_id: str

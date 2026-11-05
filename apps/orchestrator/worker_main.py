@@ -146,14 +146,28 @@ async def _agent_call(agent: str, payload: dict) -> dict:
 
 
 async def _writer_steps(pack, analysis, trace_id):
-    """Batch 34: the Writer's three steps as three PARALLEL
-    invocations of the Writer Worker, one per mode, so each
-    gets its own 2,000ms CPU budget. A single Writer invocation
-    kept dying at exactly 2,010ms CPU on GOOGL (the three
-    chains' parse/diff/validate together exceed the Workers
-    Free budget in Pyodide). The story call raises on failure —
-    a briefing needs a story; the KPI and fine-print calls fall
-    back to their hiding results (the section hides). Returns
+    """Batch 42: the Writer's three steps as three SEQUENTIAL
+    invocations of the Writer Worker, one per mode, one after
+    the other — story, then KPI, then fine print. Batch 34 ran
+    them in parallel (asyncio.gather) so each got its own
+    2,000ms CPU budget, and a single invocation kept dying at
+    exactly 2,010ms CPU on GOOGL. But the parallel calls proved
+    worse in practice: the KPI leg works alone (12 items, live,
+    Batch 41) yet returns empty in full runs, and the dashboard
+    shows the Writer hitting the CPU limit in clusters
+    ("Worker exceeded CPU time limit", 503, plus cascade resets
+    of sibling requests) at the same minutes the parallel mode
+    calls fire — three simultaneous Python isolates paying
+    cold-start/import CPU at once, plus three concurrent
+    Workers AI calls on one free-tier account and a doubled
+    SEC fetch burst (the 99.1 fetched twice). Sequential calls
+    warm one isolate and reuse it, and the three steps no
+    longer contend for the model or for SEC. Cost: wall-clock
+    is the sum (~40s story + ~64s KPI + ~21s fine print,
+    inside the 300s agent timeout and the ~300s stream limit).
+    The story call raises on failure — a briefing needs a
+    story; the KPI and fine-print calls fall back to their
+    hiding results (the section hides). Returns
     (story_result, kpi_result, fine_print_result) for
     run_briefing_async to assemble into the Briefing."""
     async def _step(mode, key, fallback=None):
@@ -165,11 +179,9 @@ async def _writer_steps(pack, analysis, trace_id):
             if fallback is None:
                 raise
             return fallback
-    story, kpi, fp = await asyncio.gather(
-        _step("story", "story_result"),
-        _step("kpi", "kpi_result", {"items": [], "diagram": None, "source_url": ""}),
-        _step("fineprint", "fine_print_result", {"items": [], "source_urls": []}),
-    )
+    story = await _step("story", "story_result")
+    kpi = await _step("kpi", "kpi_result", {"items": [], "diagram": None, "source_url": ""})
+    fp = await _step("fineprint", "fine_print_result", {"items": [], "source_urls": []})
     return story, kpi, fp
 
 
