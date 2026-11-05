@@ -84,7 +84,15 @@ async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> Ev
 
     if requested_end:
         try:
-            recent_q = await mcp_call("filings", "list_recent_filings", {"ticker": t, "limit": 50})
+            # Limit 300, not 50: the submissions "recent" array holds
+            # 1000 rows and the limit is a client-side slice, so 300
+            # costs no extra request — but 50 ages out the earnings
+            # 8-K for frequent filers. NVDA's May 20, 2026 earnings
+            # 8-K was outside the 50-window by November, so the
+            # April-quarter pick fell back to a June 30 non-earnings
+            # 8-K and consensus + price reaction anchored to the
+            # wrong date (Nov 4, 2026).
+            recent_q = await mcp_call("filings", "list_recent_filings", {"ticker": t, "limit": 300})
         except Exception as e:
             return EvidencePack(
                 ticker=t, company_name=company_name, quarter_label=quarter, quarter_end=date.fromisoformat(requested_end),
@@ -146,7 +154,11 @@ async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> Ev
     # price, consensus) so missing[] keeps its old order.
     (recent, _filing_text, hist, filing_facts,
      price_raw, consensus_raw) = await asyncio.gather(
-        asyncio.sleep(0, result=recent_q) if requested_end else mcp_call("filings", "list_recent_filings", {"ticker": t, "limit": 10}),
+        # Limit 50, not 10: the picked earnings filing can be ~10
+        # weeks old on the latest path, and the 10 most recent
+        # filings span only ~3-4 weeks for frequent filers — the
+        # reportDate match below would then miss it.
+        asyncio.sleep(0, result=recent_q) if requested_end else mcp_call("filings", "list_recent_filings", {"ticker": t, "limit": 50}),
         mcp_call("filings", "get_filing_text", {
             "ticker": t, "accession": filing.get("accessionNumber"),
             "primary_document": filing.get("primaryDocument"), "max_chars": 12000}),

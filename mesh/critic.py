@@ -199,15 +199,19 @@ def critique(pack: EvidencePack, analysis: Analysis, mcp_call=None) -> Critique:
             if "estimate_range" not in b:
                 fail("beat_miss", f"EPS beat/miss uses estimate {b['estimate']} that is not in pack.consensus.")
 
-    # Price reaction recomputation
+    # Price reaction recomputation — same rule as the Analyst:
+    # base = last close on or before the report date, reaction =
+    # first close after it (skips weekends/holidays).
     pr = pack.price_reaction or {}
     closes = pr.get("closes") if isinstance(pr, dict) else None
     price_entries = [b for b in analysis.beat_miss if b.get("metric") == "price_reaction"]
-    if closes and len(closes) >= 2 and price_entries:
+    if closes and price_entries:
         report_date = pack.report_date.date().isoformat() if hasattr(pack.report_date, "date") else str(pack.report_date)[:10]
-        idx = next((i for i, c in enumerate(closes) if c.get("date") == report_date), None)
-        if idx is not None and idx + 1 < len(closes):
-            expected = _pct(float(closes[idx + 1]["close"]), float(closes[idx]["close"]))
+        ordered = sorted((c for c in closes if c.get("date")), key=lambda c: c["date"])
+        prev = next((c for c in reversed(ordered) if c["date"] <= report_date), None)
+        cur = next((c for c in ordered if c["date"] > report_date), None)
+        if prev is not None and cur is not None:
+            expected = _pct(float(cur["close"]), float(prev["close"]))
             if expected is not None and abs(price_entries[0].get("diff_pct", 0) - round(expected, 2)) > 0.5:
                 fail("arithmetic", f"Price reaction {price_entries[0].get('diff_pct')} does not match recomputed {expected} from closes.")
     if price_entries and not closes:

@@ -34,13 +34,17 @@ from .consensus import (
 )
 from .edgar_facts import (
     ALTERNATE_TAGS,
+    INSTANT_METRICS,
     USER_AGENT as EDGAR_FACTS_UA,
     _rows_from_payload,
+    apply_derived_metrics,
     companyfacts_tag_units,
     derive_q4_rows,
     needs_companyfacts_fallback,
     parse_concept_rows,
+    parse_instant_rows,
     pick_latest_tag,
+    split_taxonomy,
 )
 from .transcript import (
     UA as TRANSCRIPT_UA,
@@ -107,19 +111,32 @@ async def async_list_recent_filings(ticker: str, limit: int = 10) -> dict:
 
 
 async def async_get_latest_earnings_filing(ticker: str) -> dict:
-    """Async mirror of edgar.get_latest_earnings_filing."""
+    """Async mirror of edgar.get_latest_earnings_filing.
+
+    Same Item 2.02 walk as the sync version (see edgar.py): the
+    most recent 8-K is often not the earnings release, and the
+    old most-recent-8-K pick anchored NVDA's July briefing to a
+    Sep 3, 2026 non-earnings 8-K, losing its consensus. Falls
+    back to the most recent 8-K when no candidate matches.
+    """
     facts = await async_get_company_facts(ticker)
     if "error" in facts:
         return facts
     sub = await _submissions(facts["cik_padded"])
     recent = sub["filings"]["recent"]
+    eights = [(i, recent["accessionNumber"][i], recent["primaryDocument"][i])
+              for i, form in enumerate(recent["form"]) if form == "8-K"][:edgar_mod._MAX_EARNINGS_CANDIDATES]
     idx = None
-    for i, form in enumerate(recent["form"]):
-        if form == "8-K":
+    for i, acc, doc in eights:
+        try:
+            head = (await async_get_filing_text(ticker, acc, doc, max_chars=12000)).get("excerpt", "")
+        except Exception:
+            continue
+        if edgar_mod._is_earnings_8k_text(head):
             idx = i
             break
     if idx is None:
-        idx = 0
+        idx = eights[0][0] if eights else 0
     acc = recent["accessionNumber"][idx]
     doc = recent["primaryDocument"][idx]
     url = f"https://www.sec.gov/Archives/edgar/data/{facts['cik']}/{acc.replace('-', '')}/{doc}"
@@ -127,7 +144,7 @@ async def async_get_latest_earnings_filing(ticker: str) -> dict:
         "ticker": facts["ticker"], "company_name": facts["company_name"], "cik": facts["cik"],
         "form": recent["form"][idx], "filingDate": recent["filingDate"][idx],
         "accessionNumber": acc, "primaryDocument": doc, "url": url,
-        "note": "8-K is the usual earnings-release filing. Verify the quarter in the document text — do not assume it from the filing date alone.",
+        "note": "Most recent 8-K furnishing an earnings release (Item 2.02). Verify the quarter in the document text — do not assume it from the filing date alone.",
     }
 
 
@@ -156,7 +173,9 @@ async def _fetch_concept(cik: int, tag: str) -> dict:
     # Both transports decompress gzip themselves (fetch on the
     # Worker, the to_thread urllib path locally), so unlike the
     # sync fetch_concept no manual gzip handling is needed here.
-    url = f"https://data.sec.gov/api/xbrl/companyconcept/CIK{cik:010d}/us-gaap/{tag}.json"
+    # A "dei:"-prefixed tag selects the DEI taxonomy.
+    taxonomy, bare = split_taxonomy(tag)
+    url = f"https://data.sec.gov/api/xbrl/companyconcept/CIK{cik:010d}/{taxonomy}/{bare}.json"
     return await fetch_json(url, headers={"User-Agent": EDGAR_FACTS_UA})
 
 
@@ -172,7 +191,7 @@ async def async_get_quarterly_facts(cik: int, limit: int = 8,
     """Async mirror of edgar_facts.get_quarterly_facts, with the
     same recency-aware tag pick (see pick_latest_tag) and the
     same companyfacts fallback (see needs_companyfacts_fallback).
-    Tag fetches run concurrently: a ticker can need up to 10
+    Tag fetches run concurrently: a ticker can need up to 20
     concept payloads, and fetching them one by one was the
     slowest part of the Scout Worker. gather preserves tag
     order, so the tie-break (earlier-priority tag stands)
@@ -182,6 +201,7 @@ async def async_get_quarterly_facts(cik: int, limit: int = 8,
     which is fine because it runs rarely and on small rows."""
     result: dict = {}
     missing: list[str] = []
+    picked_payloads: dict[str, dict] = {}
     _cf: list = []
 
     async def _companyfacts():
@@ -197,9 +217,13 @@ async def async_get_quarterly_facts(cik: int, limit: int = 8,
             try:
                 payload = await _fetch_concept(cik, tag)
             except Exception:
-                return (tag, [])
-            return (tag, _rows_from_payload(payload, metric))
-        candidates = await asyncio.gather(*[_one(tag) for tag in tags])
+                return (tag, [], {})
+            rows = (parse_instant_rows(payload, metric) if metric in INSTANT_METRICS
+                    else _rows_from_payload(payload, metric))
+            return (tag, rows, payload)
+        gathered = await asyncio.gather(*[_one(tag) for tag in tags])
+        candidates = [(tag, rows) for tag, rows, _ in gathered]
+        tag_payloads = {tag: payload for tag, _, payload in gathered}
         picked = pick_latest_tag(candidates)
         fallback_tried = False
         if companyfacts_fetch is not None and needs_companyfacts_fallback(picked, report_date):
@@ -207,19 +231,23 @@ async def async_get_quarterly_facts(cik: int, limit: int = 8,
             fallback_tried = cf is not None
             if cf:
                 for tag in tags:
-                    rows = _rows_from_payload(
-                        {"units": companyfacts_tag_units(cf, tag)}, metric)
+                    cf_payload = {"units": companyfacts_tag_units(cf, tag)}
+                    rows = (parse_instant_rows(cf_payload, metric) if metric in INSTANT_METRICS
+                            else _rows_from_payload(cf_payload, metric))
                     if rows:
                         candidates.append((tag, rows))
+                        tag_payloads[tag] = cf_payload
                 picked = pick_latest_tag(candidates)
         if picked:
             tag, rows = picked
             result[metric] = {"tag": tag, "rows": rows[:limit]}
+            picked_payloads[metric] = tag_payloads.get(tag, {})
         else:
             note = f"No quarterly-duration 10-Q row for {metric} (tried: {', '.join(tags)})"
             if fallback_tried:
                 note += " (companyfacts fallback also empty)"
             missing.append(note)
+    apply_derived_metrics(result, picked_payloads, limit)
     result["missing"] = missing
     return result
 
@@ -239,6 +267,8 @@ async def async_get_filing_facts(ticker: str, report_date: str = "") -> dict:
         for row in data["rows"]:
             if metric == "gaap_eps":
                 value, unit = float(row["value"]), "USD"
+            elif metric == "shares_outstanding":
+                value, unit = float(row["value"]) / 1e9, "shares_B"
             else:
                 value, unit = float(row["value"]) / 1e9, "USD_B"
             out.append({
@@ -376,7 +406,26 @@ async def _market_tool(name: str, *args):
 
 
 async def async_get_price_reaction(ticker: str, report_date: str = "") -> dict:
-    return await _market_tool("get_price_reaction", ticker, report_date)
+    # Nasdaq via worker_http (pyfetch on the Worker, urllib thread
+    # locally). Batch 28 flip: Stooq serves nothing to automated
+    # clients (VM curl timeout, text-fetch failure, blank browser
+    # tab), so the fetcher moved to Nasdaq historical JSON — same
+    # data class, same payload shape, only the source label changed.
+    # The sync market.py path uses urllib directly and cannot run
+    # in a Worker; yfinance is not installed there either, which
+    # is why the cloud market section was empty before Batch 28.
+    from . import market
+    fromd, tod = market.nasdaq_window(report_date)
+    try:
+        data = await fetch_json(
+            market.NASDAQ_URL.format(sym=ticker.strip().upper(), fromd=fromd, tod=tod),
+            headers=market.NASDAQ_HEADERS)
+    except Exception as e:
+        return {"ticker": ticker.upper(), "error": f"Nasdaq fetch failed: {e}", "source": "Nasdaq (free)"}
+    closes = market.parse_nasdaq_closes(data)
+    if not closes:
+        return {"ticker": ticker.upper(), "error": "Nasdaq returned no parseable closes", "source": "Nasdaq (free)"}
+    return market.reaction_payload(ticker, report_date, closes)
 
 
 async def async_get_quarterly_history(ticker: str, quarters: int = 4) -> dict:

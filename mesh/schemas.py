@@ -70,5 +70,11 @@ class Briefing(BaseModel):
     story_tokens_out: int | None = None
     story_latency_s: float | None = None
     transcript_url: str = ""
+    transcript_excerpt: str = ""
+    quarter_end: str = ""
+    fine_print: list[dict] = []
+    kpis: list[dict] = []
+    kpi_source_url: str = ""
+    diagram: dict | None = None
     disclaimer: str = "Informational only. Not investment advice."
     trace_id: str
