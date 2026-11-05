@@ -595,5 +595,57 @@
   {
     "name": "Sysco Corporation",
     "ticker": "SYY"
+  },
+  {
+    "name": "Veeva Systems Inc.",
+    "ticker": "VEEV"
+  },
+  {
+    "name": "HubSpot, Inc.",
+    "ticker": "HUBS"
+  },
+  {
+    "name": "Tyler Technologies, Inc.",
+    "ticker": "TYL"
+  },
+  {
+    "name": "Constellation Energy Corporation",
+    "ticker": "CEG"
+  },
+  {
+    "name": "Vistra Corporation",
+    "ticker": "VST"
+  },
+  {
+    "name": "American Airlines Group Inc.",
+    "ticker": "AAL"
+  },
+  {
+    "name": "General Mills, Inc.",
+    "ticker": "GIS"
+  },
+  {
+    "name": "Apollo Global Management, Inc.",
+    "ticker": "APO"
+  },
+  {
+    "name": "Blackstone Inc.",
+    "ticker": "BX"
+  },
+  {
+    "name": "KKR & Co. Inc.",
+    "ticker": "KKR"
+  },
+  {
+    "name": "Ares Management Corporation",
+    "ticker": "ARES"
+  },
+  {
+    "name": "Sirius XM Holdings Inc.",
+    "ticker": "SIRI"
+  },
+  {
+    "name": "Lucid Group, Inc.",
+    "ticker": "LCID"
   }
 ]
