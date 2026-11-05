@@ -2009,7 +2009,16 @@ function politiciansCardHtml(rows) {
 async function renderOwnership(ticker) {
   const sec = $("ownership");
   if (!sec || !ticker) return;
+  // Clear stale content before the async fetch: without this,
+  // the previous briefing's cards stay visible until this
+  // ticker's data arrives, and the section can end up headed
+  // with the wrong company (Nov 5, 2026: NVDA's briefing showed
+  // "Who's trading MSFT"). The title names the new ticker now;
+  // the section hides until apply() shows it with fresh data.
+  setText($("ownership-title"), `Who's trading ${ticker}`);
+  show(sec, false);
   const apply = (data) => {
+    if (ticker !== currentTicker) return; // a newer briefing superseded this fetch
     setText($("ownership-title"), `Who's trading ${ticker}`);
     const ins = insiderCardHtml(data.insiders);
     const fun = fundsCardHtml(data.funds);
@@ -2359,6 +2368,21 @@ function render(b) {
   setHTML($("b-watch"), watch.map((w) => `<li>${esc(w)}</li>`).join(""));
   show($("sec-notes"), notes.length > 0);
   setHTML($("b-notes"), notes.map((w) => `<li>${esc(w)}</li>`).join(""));
+  // Shareable link: if the run fell back to a different quarter
+  // than requested (an unrecognized label falls back to the most
+  // recent quarter server-side), the URL must name the briefing
+  // actually shown, not the request — otherwise a shared link
+  // replays the fallback and still names the wrong quarter
+  // (Nov 5, 2026: NVDA's URL said "quarter ended 2025-07-27"
+  // while the page showed 2026-07-26).
+  if (currentQuarter && b.quarter_label && b.quarter_label !== currentQuarter) {
+    try {
+      const url = new URL(location.href);
+      url.searchParams.set("quarter", b.quarter_label);
+      history.replaceState(null, "", url);
+      currentQuarter = b.quarter_label;
+    } catch { /* URL sharing is best-effort */ }
+  }
   show($("briefing"), true);
 }
 
