@@ -423,6 +423,15 @@ async def extract_kpis_async(release_text: str, llm_call=None, ai=None, api_key:
             debug["last_parse_ok"] = last_ok
             debug["last_reply_head"] = last_text[:200]
 
+    def _fail(leg, exc):
+        # Batch 39: the chain was exhausting with replies: 0 and no
+        # visibility into HOW each leg failed (timeout vs instant
+        # error vs auth). Record the exception, truncated — error
+        # strings name the failure, never a secret.
+        if debug is not None:
+            debug.setdefault("errors", []).append(
+                {"leg": leg, "error": f"{type(exc).__name__}: {exc}"[:160]})
+
     def _finish(out):
         if debug is not None:
             valid, diagram = out
@@ -443,8 +452,8 @@ async def extract_kpis_async(release_text: str, llm_call=None, ai=None, api_key:
             settled, out = _settle_reply(last_text, release_text, allow_empty=replies > 1)
             if settled:
                 return _finish(out)
-        except Exception:
-            pass
+        except Exception as exc:
+            _fail("workers_ai", exc)
         for model in MODELS:
             try:
                 result = await asyncio.wait_for(call_gateway_binding(ai, model, system, user),
@@ -454,7 +463,8 @@ async def extract_kpis_async(release_text: str, llm_call=None, ai=None, api_key:
                 settled, out = _settle_reply(last_text, release_text, allow_empty=replies > 1)
                 if settled:
                     return _finish(out)
-            except Exception:
+            except Exception as exc:
+                _fail(f"gateway:{model}", exc)
                 continue
     if llm_call is None and not api_key:
         if debug is not None:
@@ -470,7 +480,8 @@ async def extract_kpis_async(release_text: str, llm_call=None, ai=None, api_key:
             settled, out = _settle_reply(last_text, release_text, allow_empty=replies > 1)
             if settled:
                 return _finish(out)
-        except Exception:
+        except Exception as exc:
+            _fail(f"openrouter:{model}", exc)
             continue
     if debug is not None:
         debug["settled_on"] = "exhausted"
@@ -526,7 +537,10 @@ def extract_kpis_sync(release_text: str, llm_call=None, api_key: str = "",
                     valid, diagram = out
                     debug["settled_on"] = "items" if valid else ("diagram" if diagram is not None else "empty")
                 return out
-        except Exception:
+        except Exception as exc:
+            if debug is not None:
+                debug.setdefault("errors", []).append(
+                    {"leg": f"openrouter:{model}", "error": f"{type(exc).__name__}: {exc}"[:160]})
             continue
     if debug is not None:
         debug["settled_on"] = "exhausted"
