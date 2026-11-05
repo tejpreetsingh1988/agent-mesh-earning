@@ -10,9 +10,7 @@ from mesh.agent_app import create_app
 from mesh.fineprint import fineprint_for_pack_sync
 from mesh.kpi import kpis_for_pack_sync
 from mesh.schemas import Analysis, EvidencePack
-from mesh.fineprint import fineprint_for_pack_async
-from mesh.kpi import kpis_for_pack_async
-from mesh.story_async import build_story_async
+from mesh.writer_pipeline import run_writer_steps_async
 from mesh.worker_env import ai_binding, worker_env_value
 from mesh.writer import write_briefing
 
@@ -25,9 +23,7 @@ async def _handler(payload: dict) -> dict:
     pack = EvidencePack.model_validate(pack_data)
     analysis = Analysis.model_validate(analysis_data)
     trace_id = payload.get("trace_id") or str(uuid.uuid4())
-    story = await build_story_async(pack, analysis, api_key=worker_env_value("OPENROUTER_API_KEY"), ai=ai_binding())
-    kpi_items, kpi_diagram, kpi_url = await kpis_for_pack_async(pack.ticker, pack.quarter_end.isoformat(), ai=ai_binding(), api_key=worker_env_value("OPENROUTER_API_KEY"))
-    fp_items, fp_urls = await fineprint_for_pack_async(pack.ticker, pack.quarter_end.isoformat(), pack.quarter_label, ai=ai_binding(), api_key=worker_env_value("OPENROUTER_API_KEY"))
+    story, (kpi_items, kpi_diagram, kpi_url), (fp_items, fp_urls) = await run_writer_steps_async(pack, analysis, api_key=worker_env_value("OPENROUTER_API_KEY"), ai=ai_binding())
     return write_briefing(pack, analysis, trace_id, story_result=story, kpi_result={"items": kpi_items, "diagram": kpi_diagram, "source_url": kpi_url}, fine_print_result={"items": fp_items, "source_urls": fp_urls}).model_dump(mode="json")
 
 
