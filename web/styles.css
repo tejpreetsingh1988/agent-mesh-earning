@@ -343,6 +343,40 @@ table.analyst-table td.detail-cell { color: #3f3f46; font-size: 13px; }
 [data-theme="dark"] .badge-beat { background: #052e16; color: #4ade80; border-color: #14532d; }
 [data-theme="dark"] .badge-miss { background: #450a0a; color: #fca5a5; border-color: #7f1d1d; }
 
+/* Phase 1 (Features 1–8): claim popover, glossary, copy-claim,
+   find, explainer, did-you-mean. All colours are theme tokens
+   (the dark block swaps them) — no hardcoded light/dark values
+   except the <mark> highlight, which gets its own dark rule. */
+#briefing { position: relative; }
+.claim-popover { position: absolute; z-index: 20; width: min(560px, calc(100% - 24px)); background: var(--card); color: var(--foreground); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 8px 24px rgb(0 0 0 / 0.16); padding: 16px 18px; }
+.claim-popover h4 { margin: 0 0 4px; font-size: 15px; font-weight: 700; }
+.popover-close { position: absolute; top: 6px; right: 10px; font: inherit; font-size: 20px; line-height: 1; color: var(--muted-foreground); background: none; border: 0; cursor: pointer; padding: 4px; }
+.popover-close:hover { color: var(--foreground); }
+.popover-value { font-size: 20px; font-weight: 700; margin: 0 0 10px; }
+.popover-label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted-foreground); margin: 10px 0 2px; }
+.popover-formula, .popover-source, .popover-def { font-size: 14px; margin: 0; }
+.popover-formula code { font-size: 13px; word-break: break-word; }
+.gloss { font: inherit; color: inherit; background: none; border: 0; border-bottom: 1px dotted var(--muted-foreground); padding: 0; cursor: pointer; }
+.gloss:hover { border-bottom-style: solid; }
+.copy-cell { width: 1%; white-space: nowrap; }
+.claim-copy { font: inherit; font-size: 12px; font-weight: 600; color: var(--muted-foreground); background: var(--muted); border: 0; border-radius: calc(var(--radius) - 6px); padding: 4px 10px; cursor: pointer; }
+.claim-copy:hover { color: var(--foreground); }
+#briefing-find { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+#briefing-find input { flex: 1; min-width: 200px; height: 40px; padding: 0 12px; font: inherit; font-size: 14px; color: var(--foreground); background: var(--card); border: 1px solid var(--input); border-radius: calc(var(--radius) - 4px); }
+#briefing-find input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+#briefing-find .btn-secondary { margin-top: 0; }
+mark.find-mark { background: #fde68a; color: inherit; }
+[data-theme="dark"] mark.find-mark { background: #713f12; color: #fef3c7; }
+tr.find-hit td { background: var(--muted); }
+section.find-hit { outline: 2px solid var(--green); outline-offset: 2px; }
+.did-you-mean-label { margin: 10px 0 6px; font-size: 14px; color: var(--muted-foreground); }
+#explainer-card { margin-bottom: 16px; }
+#explainer-card .btn-primary { margin-top: 4px; }
+.glossary div { margin-bottom: 10px; }
+.glossary dt { font-weight: 700; font-size: 14px; }
+.glossary dd { margin: 2px 0 0; font-size: 14px; color: var(--muted-foreground); }
+footer .btn-secondary { margin-top: 0; }
+
 /* Print (Batch 17): the briefing article is the document. Search,
    rails, workflow UI, and buttons never print; the article, any
    comparison, and the footer disclaimer do. Dark mode is forced
@@ -356,7 +390,8 @@ table.analyst-table td.detail-cell { color: #3f3f46; font-size: 13px; }
     --primary: #000000; --primary-foreground: #ffffff; --secondary: #f4f4f5; --secondary-foreground: #000000;
   }
   #bg-particles, .search-card, .compare-box, .rail, #agents, #log, #error,
-  .briefing-actions, #quarter-picker, .theme-toggle, .cache-banner { display: none !important; }
+  .briefing-actions, #quarter-picker, .theme-toggle, .cache-banner,
+  #briefing-find, .claim-popover, #explainer-card, #glossary-list { display: none !important; }
   .shell { padding: 0; max-width: none; }
   .layout { display: block; margin-top: 0; }
   .page-head .page-sub, .hero-steps { display: none; }

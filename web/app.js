@@ -168,7 +168,6 @@ function claimBlocksHtml(claims) {
 // reorder/filter the Analyst's claims, they never change one.
 const analystTableData = {};
 const analystTableState = {};
-const analystExpanded = {};
 
 // Display-only cleanup for Analyst derivations: the backend prints
 // raw binary floats, so a derivation can read 4.809999999999999
@@ -213,7 +212,6 @@ function parseClaim(c) {
 
 function analystTableHtml(key, claims) {
   const st = analystTableState[key] || (analystTableState[key] = { filter: "all", sort: "original" });
-  const expanded = analystExpanded[key] || (analystExpanded[key] = new Set());
   const parsed = (claims || []).map((c, i) => ({ ...parseClaim(c), _i: i }));
   const filtered = parsed.filter((p) => st.filter === "all" || p.kind === st.filter);
   const sorted = [...filtered];
@@ -223,16 +221,16 @@ function analystTableHtml(key, claims) {
   const filters = [["all", "All"], ["growth", "Growth"], ["margin", "Margin"], ["eps", "EPS / consensus"], ["price", "Price"], ["other", "Other"]];
   const kindColor = { growth: "#1d4ed8", margin: "#6d28d9", eps: "#b45309", price: "#0f766e", other: "#71717a" };
   if (!parsed.length) return `<p class="agent-waiting">No claims returned.</p>`;
+  // Glossary: first occurrence of each term per table render.
+  const glossUsed = new Set();
   const rows = sorted.map((p) => {
-    const isOpen = expanded.has(p._i);
-    const main = `<tr data-idx="${p._i}" title="Click to ${isOpen ? "hide" : "show"} its formula">`
-      + `<td class="metric-cell"><span class="kind-dot" style="background:${kindColor[p.kind] || "#71717a"}"></span>${esc(p.metric)}</td>`
+    const copyLabel = `Copy claim: ${p.metric} ${p.value}`.slice(0, 80);
+    return `<tr data-idx="${p._i}" title="Click to see its formula and source">`
+      + `<td class="metric-cell"><span class="kind-dot" style="background:${kindColor[p.kind] || "#71717a"}"></span>${glossifyHtml(esc(p.metric), glossUsed)}</td>`
       + `<td class="period-cell">${esc(p.period)}</td>`
       + `<td class="result-cell"><span class="result-pill kind-${p.kind}${(p.valueNum || 0) < 0 ? " negative" : ""}">${esc(p.value)}${p.arrow}</span></td>`
-      + `<td class="detail-cell">${esc(p.detail)}</td></tr>`;
-    const formula = `<tr class="formula-row" data-formula-for="${p._i}"${isOpen ? "" : " hidden"}>`
-      + `<td colspan="4"><code>${esc(p.derivation || "No derivation supplied by the Analyst.")}</code></td></tr>`;
-    return main + formula;
+      + `<td class="detail-cell">${glossifyHtml(esc(p.detail), glossUsed)}</td>`
+      + `<td class="copy-cell"><button type="button" class="claim-copy" data-copy-idx="${p._i}" aria-label="${esc(copyLabel)}">Copy</button></td></tr>`;
   }).join("");
   return `<div class="analyst-controls" data-controls="${key}">`
     + filters.map(([f, label]) => `<button type="button" class="analyst-filter${st.filter === f ? " is-on" : ""}" data-filter="${f}">${label}</button>`).join("")
@@ -241,13 +239,388 @@ function analystTableHtml(key, claims) {
     + `<option value="abs"${st.sort === "abs" ? " selected" : ""}>Biggest % first</option>`
     + `<option value="metric"${st.sort === "metric" ? " selected" : ""}>Metric A–Z</option></select></div>`
     + `<div class="analyst-table-wrap"><table class="analyst-table"><thead><tr>`
-    + `<th>Metric</th><th>Period</th><th class="num">Result</th><th>Detail</th></tr></thead>`
+    + `<th>Metric</th><th>Period</th><th class="num">Result</th><th>Detail</th><th aria-label="Copy claim"></th></tr></thead>`
     + `<tbody>${rows}</tbody></table></div>`
-    + `<p class="analyst-note">Click a row to show its exact formula. Filters and sorting only reorder the Analyst&rsquo;s claims.</p>`;
+    + `<p class="analyst-note">Click a row to see its formula and source. Filters and sorting only reorder the Analyst&rsquo;s claims.</p>`;
 }
 
-function renderAnalyst(key, claims, el, noteHtml) {
+// ---- Phase 1: claim popover, glossary, copy-claim, find (Features 1, 2, 3, 6, 8) ----
+// The shared popover is one element appended to #briefing (which is
+// position: relative). Claim rows and glossary buttons both open it;
+// Esc and the close button close it (Feature 5 layering).
+// Pure helpers are wrapped in [PHASE1-PURE] markers so the node
+// harness can extract and test them without a DOM.
+
+// [PHASE1-PURE:GLOSSARY]
+const GLOSSARY = {
+  "YoY": "Compared with the same quarter a year earlier: the Analyst pairs periods exactly 12 months apart.",
+  "QoQ": "Compared with the previous quarter: the Analyst pairs periods exactly 3 months apart.",
+  "Margin": "Operating income divided by revenue, for the same period only.",
+  "FCF": "Free cash flow: operating cash flow minus capital expenditure, for the same period.",
+  "EBITDA": "Operating income plus depreciation and amortisation, as derived from the filing (there is no GAAP EBITDA tag).",
+  "Beat/miss": "Reported EPS compared with the consensus forecast on the same basis; the briefing names the basis and never mixes bases.",
+  "Buybacks": "Cash the company paid to repurchase its own common stock, as reported in the filing's cash-flow statement.",
+  "Guidance": "An outlook statement from the company itself; shown only as reported, never as a verified claim unless the Critic passed it as one.",
+};
+// [/PHASE1-PURE]
+
+// [PHASE1-PURE:parseFactSource]
+function parseFactSource(excerpt) {
+  // Excerpt shapes (from the Scout's fact sources): "SEC EDGAR
+  // XBRL, tag Revenues; form 10-Q." and the derived form
+  // "…tag Revenues; derived Q4: FY … minus 9-month YTD …;
+  // form 10-K (derived Q4)." — tag is the first "tag …" up to
+  // ";", form is the first "form …" up to "." or ";".
+  const s = String(excerpt || "");
+  const tag = (s.match(/tag ([^;]+)/) || [])[1];
+  const form = (s.match(/form ([^.;]+)/) || [])[1];
+  return { tag: tag ? tag.trim() : "", form: form ? form.trim() : "" };
+}
+// [/PHASE1-PURE]
+
+// [PHASE1-PURE:factSourceLine]
+function factSourceLine(fact) {
+  // "publisher · form · tag · period" — a line only when tag,
+  // form and period are all present; otherwise the claim falls
+  // back to "see Sources section below" and never guesses.
+  if (!fact || !fact.period) return null;
+  const { tag, form } = parseFactSource(fact.source && fact.source.excerpt);
+  if (!tag || !form) return null;
+  const publisher = (fact.source && fact.source.publisher) || "SEC EDGAR";
+  return `${publisher} · ${form} · ${tag} · ${fact.period}`;
+}
+// [/PHASE1-PURE]
+
+// [PHASE1-PURE:matchClaimSources]
+function matchClaimSources(claim, facts) {
+  // 1) Exact fact-id match: the Analyst embeds fact ids in the
+  // RAW derivation ("…, from facts <id> and <id>."). A YoY claim
+  // names exactly its two facts, so this is unambiguous.
+  // 2) Fallback: facts whose period appears in the derivation.
+  // Only usable when every such fact shares one metric; two
+  // different metrics for the same period is ambiguous, and the
+  // popover then shows the fallback line instead of guessing.
+  // The market-reaction claim matches nothing (no price_reaction
+  // fact exists) — the fallback line is its correct outcome.
+  const derivation = String((claim && claim.derivation) || "");
+  const list = Array.isArray(facts) ? facts : [];
+  const byId = list.filter((f) => f && f.id && derivation.includes(f.id));
+  if (byId.length) return { lines: byId.map(factSourceLine).filter(Boolean), ambiguous: false };
+  const byPeriod = list.filter((f) => f && f.period && derivation.includes(f.period));
+  const metrics = [...new Set(byPeriod.map((f) => f.metric))];
+  if (byPeriod.length && metrics.length === 1) {
+    return { lines: byPeriod.map(factSourceLine).filter(Boolean), ambiguous: false };
+  }
+  return { lines: [], ambiguous: byPeriod.length > 0 };
+}
+// [/PHASE1-PURE]
+
+// [PHASE1-PURE:claimCopyText]
+function claimCopyText(claim, parsed, sourceLines, ticker, quarter) {
+  // Exact clipboard format (Feature 6 spec): the claim as the
+  // table shows it (metric + display value), the display
+  // derivation, one Source line (matched facts joined with "; ",
+  // or the fallback), and the provenance line. Numbers are copied
+  // exactly as displayed — never re-rounded here.
+  const source = sourceLines.length ? sourceLines.join("; ") : "see Sources section";
+  return `${parsed.metric} — ${parsed.value}\nFormula: ${parsed.derivation}\nSource: ${source}\nFrom earningsbrief.pages.dev — ${ticker} ${quarter}`;
+}
+// [/PHASE1-PURE]
+
+// [PHASE1-PURE:glossifyHtml]
+function glossifyHtml(escapedText, used) {
+  // Wrap the FIRST occurrence of each glossary term (per render,
+  // tracked in `used`) in a keyboard-activatable <button>.
+  // Case-insensitive, word-boundary match on the already-escaped
+  // text; the matched text keeps its original case. Terms never
+  // contain one another, so wrapping one cannot create a false
+  // match for a later term.
+  let out = String(escapedText || "");
+  for (const term of Object.keys(GLOSSARY)) {
+    if (used.has(term)) continue;
+    const re = new RegExp(`(?<![A-Za-z])${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z])`, "i");
+    const m = out.match(re);
+    if (!m) continue;
+    used.add(term);
+    out = out.slice(0, m.index)
+      + `<button type="button" class="gloss" data-gloss-term="${term}">${m[0]}</button>`
+      + out.slice(m.index + m[0].length);
+  }
+  return out;
+}
+// [/PHASE1-PURE]
+
+// [PHASE1-PURE:levenshtein]
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+// [/PHASE1-PURE]
+
+// [PHASE1-PURE:didYouMean]
+function didYouMean(query, directory) {
+  // Feature 8: Levenshtein over the local directory only (ticker,
+  // name, each name token). A candidate's score is its minimum
+  // distance; sort by (distance, name A-Z). Show the top 3 only
+  // when the BEST passes the gate (distance ≤ 3, or distance /
+  // longer length ≤ 0.4); otherwise no suggestions at all.
+  const q = String(query || "").trim().toLowerCase();
+  if (!q || !Array.isArray(directory)) return [];
+  const scored = [];
+  for (const c of directory) {
+    if (!c || !c.ticker) continue;
+    const name = String(c.name || "").toLowerCase();
+    const candidates = [c.ticker.toLowerCase(), name, ...name.split(/\s+/).filter(Boolean)];
+    let bestD = Infinity, bestLen = 0;
+    for (const s of candidates) {
+      const d = levenshtein(q, s);
+      if (d < bestD) { bestD = d; bestLen = Math.max(q.length, s.length); }
+    }
+    scored.push({ ticker: c.ticker, name: c.name || c.ticker, distance: bestD, longest: bestLen });
+  }
+  scored.sort((a, b) => (a.distance - b.distance) || String(a.name).localeCompare(String(b.name)));
+  const best = scored[0];
+  if (!best) return [];
+  if (!(best.distance <= 3 || best.distance / best.longest <= 0.4)) return [];
+  return scored.filter((s) => s.distance <= 3 || s.distance / s.longest <= 0.4).slice(0, 3);
+}
+// [/PHASE1-PURE]
+
+// [PHASE1-PURE:countFindMatches]
+function countFindMatches(query, claims, facts, storyText) {
+  // Feature 3: deterministic, client-side only. Counts
+  // case-insensitive substring occurrences across exactly three
+  // corpora — claim rows (text + value + display derivation,
+  // i.e. the fact-ids suffix stripped), Scout facts (metric +
+  // period + value + publisher + excerpt), and the story text.
+  // KPIs, diagram, fine print, ownership and comparison are
+  // NEVER searched: separate provenance, not "this briefing".
+  const q = String(query || "").toLowerCase();
+  if (!q) return 0;
+  const countIn = (s) => {
+    const t = String(s == null ? "" : s).toLowerCase();
+    return t.includes(q) ? t.split(q).length - 1 : 0;
+  };
+  let n = 0;
+  for (const c of (claims || [])) {
+    n += countIn(c.text);
+    n += countIn(c.value);
+    n += countIn(String(c.derivation || "").replace(/, from facts.*$/, ""));
+  }
+  for (const f of (facts || [])) {
+    n += countIn(f.metric) + countIn(f.period) + countIn(f.value)
+      + countIn(f.source && f.source.publisher) + countIn(f.source && f.source.excerpt);
+  }
+  n += countIn(storyText);
+  return n;
+}
+// [/PHASE1-PURE]
+
+let popoverEl = null;
+function ensurePopover() {
+  if (popoverEl) return popoverEl;
+  const article = $("briefing");
+  popoverEl = document.createElement("div");
+  popoverEl.id = "claim-popover";
+  popoverEl.className = "claim-popover";
+  popoverEl.hidden = true;
+  popoverEl.innerHTML = `<button type="button" class="popover-close" aria-label="Close">×</button><div class="popover-body"></div>`;
+  popoverEl.querySelector(".popover-close").addEventListener("click", (e) => { e.stopPropagation(); closePopover(); });
+  if (article) article.appendChild(popoverEl);
+  return popoverEl;
+}
+function openPopover(anchorEl, html) {
+  const pop = ensurePopover();
+  const body = pop.querySelector(".popover-body");
+  if (body) body.innerHTML = html;
+  pop.hidden = false;
+  // Position below the anchor, inside the briefing article.
+  const article = $("briefing");
+  if (anchorEl && article) {
+    const a = anchorEl.getBoundingClientRect();
+    const b = article.getBoundingClientRect();
+    const top = Math.max(0, a.bottom - b.top + 8);
+    const left = Math.max(0, Math.min(a.left - b.left, Math.max(0, b.width - pop.offsetWidth - 8)));
+    pop.style.top = `${top}px`;
+    pop.style.left = `${left}px`;
+  }
+}
+function closePopover() { if (popoverEl) popoverEl.hidden = true; }
+function popoverOpen() { return !!popoverEl && !popoverEl.hidden; }
+
+function openClaimPopover(anchorEl, claim, facts) {
+  // The popover is a trace, not a second verification: it shows
+  // the display derivation (stripped + rounded, exactly as the
+  // table shows it) and the deterministically matched source
+  // lines — never a guessed source.
+  const parsed = parseClaim(claim);
+  const { lines } = matchClaimSources(claim, facts);
+  const source = lines.length ? lines.map((l) => esc(l)).join("<br>") : "See Sources section below.";
+  openPopover(anchorEl,
+    `<h4>${esc(parsed.metric)}</h4>`
+    + `<p class="popover-value">${esc(parsed.value)}${parsed.arrow}</p>`
+    + `<p class="popover-label">Formula</p><p class="popover-formula"><code>${esc(parsed.derivation || "No derivation supplied by the Analyst.")}</code></p>`
+    + `<p class="popover-label">Source</p><p class="popover-source">${source}</p>`);
+}
+
+async function copyClaim(claim, facts, ctx) {
+  const parsed = parseClaim(claim);
+  const { lines } = matchClaimSources(claim, facts);
+  const ticker = (ctx && ctx.ticker) || (lastBriefing ? lastBriefing.ticker : "");
+  const quarter = (ctx && ctx.quarter) || (lastBriefing ? lastBriefing.quarter_label : "");
+  const text = claimCopyText(claim, parsed, lines, ticker, quarter);
+  try { await navigator.clipboard.writeText(text); return true; }
+  catch {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return !!ok;
+    } catch { return false; }
+  }
+}
+
+function wireGlossButtons(container) {
+  // Glossary buttons open the same shared popover as claim rows
+  // (definition only, no numbers). Buttons are re-created on
+  // every table render, so wiring happens per render.
+  if (!container) return;
+  container.querySelectorAll(".gloss").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const term = btn.dataset.glossTerm;
+      const def = GLOSSARY[term];
+      if (!def) return;
+      openPopover(btn, `<h4>${esc(term)}</h4><p class="popover-def">${esc(def)}</p>`);
+    });
+  });
+}
+
+// ---- Feature 3: "Find in this briefing" ----
+// The count is data-level (countFindMatches, pure). Navigation
+// steps through DOM targets in order: claim rows (table order),
+// story <mark>s (document order), then the Sources section when
+// a fact matched. Clearing unwraps every <mark> exactly (each
+// mark is replaced by its own text) so the story text is restored
+// byte-identical. The find searches THIS briefing's rendered
+// facts (renderFacts, snapshotted in render()) — not the
+// module-level lastScoutFacts, which a comparison run overwrites
+// with the second company's facts.
+let findHits = [];
+let findIdx = -1;
+function clearFindMarks() {
+  document.querySelectorAll("#b-story mark.find-mark").forEach((m) => {
+    m.replaceWith(document.createTextNode(m.textContent));
+  });
+  document.querySelectorAll(".find-hit").forEach((el) => el.classList.remove("find-hit"));
+}
+function resetFind() {
+  clearFindMarks();
+  findHits = [];
+  findIdx = -1;
+  const input = $("briefing-find-input");
+  if (input) input.value = "";
+  const countEl = $("briefing-find-count");
+  if (countEl) countEl.textContent = "";
+}
+function wrapStoryMatches(el, ql) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    const text = node.textContent;
+    const lower = text.toLowerCase();
+    let pos = 0, idx;
+    const frag = document.createDocumentFragment();
+    let found = false;
+    while ((idx = lower.indexOf(ql, pos)) !== -1) {
+      found = true;
+      if (idx > pos) frag.appendChild(document.createTextNode(text.slice(pos, idx)));
+      const mark = document.createElement("mark");
+      mark.className = "find-mark";
+      mark.textContent = text.slice(idx, idx + ql.length);
+      frag.appendChild(mark);
+      pos = idx + ql.length;
+    }
+    if (found) {
+      if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
+      node.replaceWith(frag);
+    }
+  }
+}
+function highlightFindHit() {
+  document.querySelectorAll(".find-hit").forEach((el) => el.classList.remove("find-hit"));
+  const el = findHits[findIdx];
+  if (!el) return;
+  el.classList.add("find-hit");
+  el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+function runFind() {
+  const input = $("briefing-find-input");
+  const q = input ? input.value.trim() : "";
+  clearFindMarks();
+  findHits = [];
+  findIdx = -1;
+  const countEl = $("briefing-find-count");
+  if (!q) { if (countEl) countEl.textContent = ""; return; }
+  const storyEl = $("b-story");
+  const storyText = storyEl ? storyEl.textContent : "";
+  const n = countFindMatches(q, lastAnalystClaims, renderFacts, storyText);
+  if (countEl) countEl.textContent = n === 1 ? "1 match" : `${n} matches`;
+  if (!n) return;
+  const ql = q.toLowerCase();
+  const table = $("b-table");
+  if (table) {
+    table.querySelectorAll("tbody tr[data-idx]").forEach((row) => {
+      const idx = Number(row.dataset.idx);
+      const c = lastAnalystClaims[idx];
+      if (!c) return;
+      const hay = `${c.text} ${c.value} ${String(c.derivation || "").replace(/, from facts.*$/, "")}`.toLowerCase();
+      if (hay.includes(ql)) findHits.push(row);
+    });
+  }
+  if (storyEl && storyText.toLowerCase().includes(ql)) {
+    wrapStoryMatches(storyEl, ql);
+    storyEl.querySelectorAll("mark.find-mark").forEach((m) => findHits.push(m));
+  }
+  const factHit = (renderFacts || []).some((f) =>
+    [f.metric, f.period, f.value, f.source && f.source.publisher, f.source && f.source.excerpt]
+      .some((v) => String(v == null ? "" : v).toLowerCase().includes(ql)));
+  if (factHit) {
+    const sec = $("b-sources");
+    if (sec) findHits.push(sec.closest("section") || sec);
+  }
+  if (findHits.length) { findIdx = 0; highlightFindHit(); }
+}
+function stepFind(dir) {
+  if (!findHits.length) return;
+  findIdx = (findIdx + dir + findHits.length) % findHits.length;
+  highlightFindHit();
+}
+
+const analystTableFacts = {};
+const analystTableContext = {};
+function renderAnalyst(key, claims, el, noteHtml, facts, ctx) {
   analystTableData[key] = claims || [];
+  // The popover matches a row's claim against the facts that
+  // produced IT — stored per table, so a comparison run (which
+  // overwrites the module-level lastScoutFacts with the second
+  // company's facts) can never make the base table cite the
+  // wrong filing. Filter/sort re-renders reuse the stored facts.
+  analystTableFacts[key] = facts || analystTableFacts[key] || lastScoutFacts || [];
+  if (ctx) analystTableContext[key] = ctx;
   if (!el) return;
   el.innerHTML = (noteHtml || "") + analystTableHtml(key, analystTableData[key]);
   const controls = el.querySelector(`[data-controls="${key}"]`);
@@ -255,23 +628,35 @@ function renderAnalyst(key, claims, el, noteHtml) {
     controls.querySelectorAll("[data-filter]").forEach((btn) => {
       btn.addEventListener("click", () => {
         analystTableState[key].filter = btn.dataset.filter;
-        renderAnalyst(key, analystTableData[key], el, noteHtml);
+        renderAnalyst(key, analystTableData[key], el, noteHtml, analystTableFacts[key], analystTableContext[key]);
       });
     });
     const sel = controls.querySelector(".analyst-sort");
     if (sel) sel.addEventListener("change", () => {
       analystTableState[key].sort = sel.value;
-      renderAnalyst(key, analystTableData[key], el, noteHtml);
+      renderAnalyst(key, analystTableData[key], el, noteHtml, analystTableFacts[key], analystTableContext[key]);
     });
   }
+  wireGlossButtons(el);
   el.querySelectorAll("tbody tr[data-idx]").forEach((row) => {
-    row.addEventListener("click", () => {
+    row.addEventListener("click", (e) => {
+      e.stopPropagation();
       const idx = Number(row.dataset.idx);
-      const set = analystExpanded[key] || (analystExpanded[key] = new Set());
-      if (set.has(idx)) set.delete(idx); else set.add(idx);
-      const fr = el.querySelector(`[data-formula-for="${idx}"]`);
-      if (fr) fr.hidden = !set.has(idx);
-      row.title = `Click to ${set.has(idx) ? "hide" : "show"} its formula`;
+      const claim = (analystTableData[key] || [])[idx];
+      if (!claim) return;
+      openClaimPopover(row, claim, analystTableFacts[key]);
+    });
+  });
+  el.querySelectorAll(".claim-copy").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const idx = Number(btn.dataset.copyIdx);
+      const claim = (analystTableData[key] || [])[idx];
+      if (!claim) return;
+      const ok = await copyClaim(claim, analystTableFacts[key], analystTableContext[key]);
+      const orig = btn.textContent;
+      btn.textContent = ok ? "Copied" : "Copy failed";
+      setTimeout(() => { btn.textContent = orig; }, 2000);
     });
   });
 }
@@ -287,6 +672,7 @@ function themeColor(light, dark) {
 }
 let lastScoutFacts = [];
 let lastAnalystClaims = [];
+let renderFacts = [];
 const chartInstances = {};
 
 function destroyChart(id) {
@@ -595,6 +981,7 @@ function onStreamEvent(ev, ticker) {
   if (name === "scout_done") {
     const facts = ev.fact_list || [];
     lastScoutFacts = facts;
+    currentQuarterLabel = ev.quarter_label || "";
     updateTrendChart();
     const publishers = [...new Set(facts.map((f) => (f.source && f.source.publisher) || "").filter(Boolean))];
     setBody("scout",
@@ -618,7 +1005,7 @@ function onStreamEvent(ev, ticker) {
     const note = analystRuns > 1
       ? `<p class="agent-note">Revised after Critic feedback.</p>` : "";
     const analystEl = card("analyst") && card("analyst").querySelector("[data-body]");
-    renderAnalyst("analyst", claims, analystEl, note);
+    renderAnalyst("analyst", claims, analystEl, note, lastScoutFacts, { ticker: currentTicker, quarter: currentQuarterLabel });
     updateAllCharts();
     setStatus("analyst", "done", ev.duration_ms ? `took ${secs(ev.duration_ms)}` : "");
     setConductor("Now: Critic — re-checking every number", "Step 3 of 4 · Next: Writer");
@@ -862,6 +1249,7 @@ async function runPost(ticker, quarter = "", onBriefing = null) {
 // suggestion click that starts the run.
 let currentTicker = "";
 let currentQuarter = "";
+let currentQuarterLabel = "";
 
 // Batch 31: the in-flight (or just-broken) stream's run id,
 // set by its run_started event. The retry button after a break
@@ -1262,6 +1650,8 @@ function compareTableHtml(baseTicker, secondTicker, rows) {
 function renderComparison(base, second) {
   const sec = $("comparison");
   if (!sec || !base || !second) return;
+  // Feature 7: the tab names the pair it shows.
+  document.title = `${base.ticker} vs ${second.ticker} | Earnings Ledger`;
   const sameQuarter = base.quarter_label === second.quarter_label;
   $("comparison-title").textContent = `Head to head: ${base.ticker} vs ${second.ticker}`;
   $("comparison-quarters").textContent = sameQuarter
@@ -1767,11 +2157,21 @@ async function renderUnitEconomics(baseTicker, secondTicker) {
 
 function render(b) {
   lastBriefing = b;
+  renderFacts = lastScoutFacts;
   renderQuarterPicker(b.quarter_label);
+  // Feature 7: the tab names the company and quarter it shows.
+  document.title = `${b.ticker} — ${b.quarter_label} | Earnings Ledger`;
   setText($("b-ticker"), b.ticker);
   setHTML($("b-logo"), logoImg(b.ticker, "logo-img logo-header"));
   setText($("b-quarter"), b.quarter_label);
-  setText($("b-verdict"), b.verdict);
+  // Feature 2: the verdict's first glossary term per render gets
+  // a dotted underline + button (same shared popover as claims).
+  setHTML($("b-verdict"), glossifyHtml(esc(b.verdict), new Set()));
+  wireGlossButtons($("b-verdict"));
+  // Feature 3: the find box rides with the article; a new render
+  // resets its state (a stale query would count the old briefing).
+  show($("briefing-find"), true);
+  resetFind();
   // Takeaways (Batch 29): derived only from this briefing's own
   // verified claims and drivers — no new model call, no new cost.
   // Unlike the checked line, these need no fresh run: a cache
@@ -1781,16 +2181,18 @@ function render(b) {
   setHTML($("b-takeaways"), takeaways.map((t) => `<li>${esc(t)}</li>`).join(""));
   // Claim values are percentages; the raw float (8.868501529051978)
   // is an internal artifact, so round to the one decimal the claim
-  // text itself uses. Derivations drop their "from facts …" suffix:
-  // the internal fact IDs are not something a reader can use.
+  // text itself uses. The RAW derivation is kept here (with its
+  // "from facts …" suffix): parseClaim strips that suffix for
+  // display, and the popover matches sources against it — so the
+  // display never shows internal fact IDs, but the trace survives.
   // Same claim blocks as the Analyst card, so the record matches
   // what the card showed.
   const briefingClaims = (b.table || []).map((row) => ({
     text: row.claim, value: row.value,
-    derivation: String(row.derivation || "").replace(/, from facts.*$/, ""),
+    derivation: String(row.derivation || ""),
   }));
   lastAnalystClaims = briefingClaims;
-  renderAnalyst("briefing", briefingClaims, $("b-table"), "");
+  renderAnalyst("briefing", briefingClaims, $("b-table"), "", lastScoutFacts, { ticker: b.ticker, quarter: b.quarter_label });
   updateAllCharts(b.quarter_label);
   renderBeatMissBadge();
   // The checked line belongs to a fresh run only: render() also
@@ -1928,6 +2330,23 @@ function renderSearchResults(matches, query, fallback = false) {
         + `or a ticker like GOOGL (each company page carries its ticker).</p>`
       : `<p class="search-empty">No company matched "${esc(query)}" — try a different spelling, `
         + `or a ticker like GOOGL (each company page carries its ticker).</p>`;
+    // Feature 8: a mistyped name still lands on the right company.
+    // Suggestions come from the local directory only (already
+    // loaded by the time a search runs) and are NEVER
+    // search-logged — clicking one runs the briefing directly.
+    const suggestions = didYouMean(query, directoryCache || []);
+    if (suggestions.length) {
+      box.innerHTML += `<p class="did-you-mean-label">Did you mean:</p>`
+        + suggestions.map((m) =>
+          `<button type="button" class="chip search-match did-you-mean-chip" data-ticker="${esc(m.ticker)}">`
+          + `${logoImg(m.ticker, "logo-img logo-chip")}${esc(m.name)} (${esc(m.ticker)})</button>`).join("");
+      box.querySelectorAll(".did-you-mean-chip").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          show(box, false);
+          getBriefing(btn.dataset.ticker);
+        });
+      });
+    }
   } else {
     const note = fallback
       ? `<p class="search-empty">No indexed matches — showing directory matches instead.</p>` : "";
@@ -2284,4 +2703,76 @@ document.querySelectorAll(".baton-step").forEach((step) => {
     if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
   });
 });
+// ---- Phase 1 wiring (Features 3, 4, 5) ----
+// Find box (Feature 3): input + Prev/Next, wired once; render()
+// resets its state per briefing.
+const findInput = $("briefing-find-input");
+if (findInput) findInput.addEventListener("input", runFind);
+const findPrev = $("briefing-find-prev");
+if (findPrev) findPrev.addEventListener("click", () => stepFind(-1));
+const findNext = $("briefing-find-next");
+if (findNext) findNext.addEventListener("click", () => stepFind(1));
+
+// Keyboard shortcuts (Feature 5): "/" focuses search (never
+// inserts the "/" character, never fires from inside a field);
+// Esc closes one layer per press — popover, then search
+// results, then compare results.
+document.addEventListener("keydown", (e) => {
+  const tag = (e.target && e.target.tagName) || "";
+  const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(tag) || (e.target && e.target.isContentEditable);
+  if (e.key === "/" && !inField && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    const s = $("company-search");
+    if (s) { s.focus(); s.select(); }
+    return;
+  }
+  if (e.key === "Escape") {
+    if (popoverOpen()) { closePopover(); return; }
+    const cr = $("company-results");
+    if (cr && !cr.hidden) { show(cr, false); return; }
+    const cpr = $("compare-results");
+    if (cpr && !cpr.hidden) { show(cpr, false); return; }
+  }
+});
+// Click-outside closes the popover (openers stopPropagation, so
+// the click that opens it never reaches this listener).
+document.addEventListener("click", (e) => {
+  if (popoverOpen() && popoverEl && !popoverEl.contains(e.target)) closePopover();
+});
+
+// Explainer card (Feature 4): first visit only; "Got it" sets
+// the dismissal key; the footer link re-shows it (and never
+// touches the briefing cache).
+const explainerCard = $("explainer-card");
+if (explainerCard) {
+  try { if (!localStorage.getItem("ame_explainer_dismissed")) show(explainerCard, true); } catch {}
+}
+const explainerBtn = $("explainer-gotit");
+if (explainerBtn) explainerBtn.addEventListener("click", () => {
+  try { localStorage.setItem("ame_explainer_dismissed", "1"); } catch {}
+  show(explainerCard, false);
+});
+const explainerAgain = $("explainer-again");
+if (explainerAgain) explainerAgain.addEventListener("click", () => {
+  try { localStorage.removeItem("ame_explainer_dismissed"); } catch {}
+  show(explainerCard, true);
+  if (explainerCard) explainerCard.scrollIntoView({ block: "nearest" });
+});
+
+// Glossary list (Feature 2): the footer link toggles a full
+// list of all eight definitions — the same GLOSSARY text, one
+// page section, no new page.
+const glossaryList = $("glossary-list");
+const glossaryItems = $("glossary-items");
+if (glossaryItems) {
+  glossaryItems.innerHTML = Object.entries(GLOSSARY).map(([term, def]) =>
+    `<div><dt>${esc(term)}</dt><dd>${esc(def)}</dd></div>`).join("");
+}
+const glossaryLink = $("glossary-link");
+if (glossaryLink) glossaryLink.addEventListener("click", () => {
+  const hidden = !glossaryList || glossaryList.hidden;
+  show(glossaryList, hidden);
+  if (hidden && glossaryList) glossaryList.scrollIntoView({ block: "nearest" });
+});
+
 initBackground();

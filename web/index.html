@@ -37,6 +37,17 @@
     </ol>
   </header>
 
+  <!-- Phase 1, Feature 4: first-visit explainer card. Shown on
+       load only when localStorage.ame_explainer_dismissed is
+       unset; "Got it" dismisses it for good. -->
+  <section class="card" id="explainer-card" hidden>
+    <h3>How to read this briefing</h3>
+    <p class="body-text">Four agents do the work: Scout finds the filing, Analyst computes the numbers, Critic re-checks every one, and Writer writes only what passed.</p>
+    <p class="body-text">Every number traces to a filing — click any claim to see its formula and source.</p>
+    <p class="body-text">Nothing here is investment advice, and there are no recommendations or price targets.</p>
+    <button type="button" class="btn-primary" id="explainer-gotit">Got it</button>
+  </section>
+
   <section class="card search-card">
     <label class="label" for="company-search">Search by company name or ticker</label>
     <div class="search-row">
@@ -95,7 +106,7 @@
           <li><strong>Centre:</strong> the run ledger — one row per agent, in order — then the full briefing.</li>
           <li><strong>Right:</strong> charts drawn from the same Scout facts and Analyst claims — no new numbers.</li>
         </ul>
-        <p class="meta">Click any Analyst row to expand its exact formula. Filter and sort the table without losing the derivation.</p>
+        <p class="meta">Click any Analyst row to see its formula and source. Filter and sort the table without losing the derivation.</p>
       </section>
     </aside>
 
@@ -194,6 +205,16 @@
           <span class="badge" id="b-beatmiss" hidden></span>
         </div>
         <h2 id="b-verdict" class="verdict"></h2>
+        <!-- Phase 1, Feature 3: find in this briefing. Shown by
+             render() with the article; searches claims, facts and
+             story only — never KPIs, diagram, fine print,
+             ownership or comparison. -->
+        <div id="briefing-find" hidden>
+          <input id="briefing-find-input" type="text" autocomplete="off" spellcheck="false" placeholder="Find in this briefing…">
+          <span id="briefing-find-count" class="meta"></span>
+          <button type="button" class="btn-secondary" id="briefing-find-prev">Prev</button>
+          <button type="button" class="btn-secondary" id="briefing-find-next">Next</button>
+        </div>
         <section class="card" id="sec-takeaways" hidden>
           <h3>Takeaways</h3>
           <ul id="b-takeaways" class="list"></ul>
@@ -376,7 +397,18 @@
     Background: <a href="https://github.com/tsparticles/tsparticles">tsParticles</a> (MIT, slim bundle).
     Charts: <a href="https://github.com/chartjs/Chart.js">Chart.js</a> (MIT).
     <a href="companies/">Browse the company directory</a>.</p>
+    <p class="meta">Shortcuts: `/` focuses search · `Esc` closes overlays.
+    <button type="button" class="btn-secondary" id="explainer-again">Show the explainer again</button>
+    <button type="button" class="btn-secondary" id="glossary-link">Glossary</button></p>
   </footer>
+
+  <!-- Phase 1, Feature 2: the full glossary list, rendered from
+       the same GLOSSARY text as the tooltips. One page section,
+       no new page. -->
+  <section class="card" id="glossary-list" hidden>
+    <h3>Glossary</h3>
+    <dl class="glossary" id="glossary-items"></dl>
+  </section>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/tsparticles-slim@2.12.0/tsparticles.slim.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
