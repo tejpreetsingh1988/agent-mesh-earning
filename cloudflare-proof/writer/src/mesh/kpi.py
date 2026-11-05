@@ -126,15 +126,13 @@ def validate_kpis(items, release_text: str) -> list:
 
 
 def kpi_prompt(release_text: str) -> tuple:
-    """One extraction prompt. Standard financials are excluded
+    """KPIs only (Batch 40 split). Standard financials are excluded
     on purpose: revenue, net income, EPS and EBITDA already live
     in the Critic-verified claims, so repeating them here would
-    add noise, not signal. Batch 23 shares this call: the same
-    reply also carries the business-model diagram spec (nodes +
-    edges), grounded only in this release text — its company
-    description and highlights, which sit early in a typical
-    release (BROS's About paragraph is 14% through its text,
-    inside the 20,000-char window)."""
+    add noise, not signal. The diagram is a separate, smaller
+    call (diagram_prompt) — the combined prompt's long JSON
+    output timed out on Workers AI (60s) while the story prompt
+    completes, so the two halves run apart."""
     system = ("You extract company-specific operating KPIs from an earnings release. "
               "Return JSON only, no prose, no markdown outside the JSON object.")
     user = ("Extract the company's operating KPIs from this earnings release. "
@@ -146,7 +144,28 @@ def kpi_prompt(release_text: str) -> tuple:
             "in the text. Do NOT include revenue, net income, EPS, EBITDA or margins — "
             "those are covered elsewhere. If nothing qualifies, return {\"kpis\": []}. "
             "Period is the quarter or year the value refers to (e.g. \"Q3 2026\").\n\n"
-            "Also describe how the company makes money as a \"diagram\" object, "
+            f"Release text:\n\n{release_text[:RELEASE_TEXT_CAP]}\n\n"
+            "Return {\"kpis\": [{\"name\": ..., \"value\": ..., \"unit\": ..., "
+            "\"period\": ..., \"kind\": \"metric\"|\"outlook\"}]}.")
+    return system, user
+
+
+DIAGRAM_TEXT_CAP = 6000
+
+
+def diagram_prompt(kpis: list, release_text: str) -> tuple:
+    """Diagram only (Batch 40 split): the business-model flow,
+    grounded only in this release text — its company description
+    and highlights, which sit early in a typical release (BROS's
+    About paragraph is 14% through its text, inside the 6,000-char
+    window). The extracted KPIs ride along so the model knows the
+    business. Small input, small output: it finishes well inside
+    the 60s Workers AI timeout that killed the combined call."""
+    names = ", ".join(str(k.get("name", "")) for k in kpis if isinstance(k, dict))
+    system = ("You describe how a company makes money as a flow diagram. "
+              "Return JSON only, no prose, no markdown outside the JSON object.")
+    user = (f"The company's operating KPIs are: {names}. "
+            "Describe how the company makes money as a \"diagram\" object, "
             "grounded ONLY in this release text (its company description and "
             "highlights): {\"nodes\": [{\"id\": ..., \"label\": ..., \"role\": ...}], "
             "\"edges\": [{\"from\": ..., \"to\": ..., \"kind\": ..., \"label\": ...}]}. "
@@ -156,12 +175,39 @@ def kpi_prompt(release_text: str) -> tuple:
             "edge labels at most 4 words, at most 8 nodes and 10 edges. NO numbers "
             "anywhere in any label. Edge kind is \"money\" for cash flowing or "
             "\"value\" for product, service or attention flowing. If the release "
-            "does not describe a clear model, omit \"diagram\".\n\n"
-            f"Release text:\n\n{release_text[:RELEASE_TEXT_CAP]}\n\n"
-            "Return {\"kpis\": [{\"name\": ..., \"value\": ..., \"unit\": ..., "
-            "\"period\": ..., \"kind\": \"metric\"|\"outlook\"}], "
-            "\"diagram\": {\"nodes\": [...], \"edges\": [...]}}.")
+            "does not describe a clear model, return {\"diagram\": null}.\n\n"
+            f"Release text:\n\n{release_text[:DIAGRAM_TEXT_CAP]}\n\n"
+            "Return {\"diagram\": {\"nodes\": [...], \"edges\": [...]}}.")
     return system, user
+
+
+def _extract_json_obj(text: str):
+    """The JSON object in one model reply, or (None, False).
+    Shared by the KPI and diagram parsers: fence-stripped, first
+    { to last }, one retry with trailing commas stripped (Batch
+    36 — the one unambiguous repair). Anything else garbled
+    (unclosed strings, truncated output) fails cleanly."""
+    if not text:
+        return None, False
+    cleaned = re.sub(r"```(?:json)?", "", text).strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start < 0 or end <= start:
+        return None, False
+    try:
+        obj = json.loads(cleaned[start:end + 1])
+    except (ValueError, TypeError):
+        repaired = re.sub(r",\s*([}\]])", r"\1", cleaned[start:end + 1])
+        if repaired != cleaned[start:end + 1]:
+            try:
+                obj = json.loads(repaired)
+            except (ValueError, TypeError):
+                return None, False
+        else:
+            return None, False
+    if not isinstance(obj, dict):
+        return None, False
+    return obj, True
 
 
 def parse_kpi_response(text: str) -> tuple:
@@ -169,29 +215,8 @@ def parse_kpi_response(text: str) -> tuple:
     parsed-ok). A reply that parses to no KPIs and no diagram is a
     real answer (the release has nothing), distinct from a garbled
     reply (parsed-ok False) — the chain treats them differently."""
-    if not text:
-        return [], None, False
-    cleaned = re.sub(r"```(?:json)?", "", text).strip()
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start < 0 or end <= start:
-        return [], None, False
-    try:
-        obj = json.loads(cleaned[start:end + 1])
-    except (ValueError, TypeError):
-        # Batch 36: small models often emit a trailing comma before
-        # } or ] — the one repair that is unambiguous, so retry once
-        # with trailing commas stripped. Anything else garbled
-        # (unclosed strings, truncated output) still fails cleanly.
-        repaired = re.sub(r",\s*([}\]])", r"\1", cleaned[start:end + 1])
-        if repaired != cleaned[start:end + 1]:
-            try:
-                obj = json.loads(repaired)
-            except (ValueError, TypeError):
-                return [], None, False
-        else:
-            return [], None, False
-    if not isinstance(obj, dict):
+    obj, ok = _extract_json_obj(text)
+    if not ok:
         return [], None, False
     items = obj.get("kpis", obj.get("metrics", []))
     if not isinstance(items, list):
@@ -200,6 +225,18 @@ def parse_kpi_response(text: str) -> tuple:
     if not isinstance(diagram, dict):
         diagram = None
     return items, diagram, True
+
+
+def parse_diagram_response(text: str) -> tuple:
+    """Parse one diagram reply (Batch 40 split): (diagram
+    dict-or-None, parsed-ok)."""
+    obj, ok = _extract_json_obj(text)
+    if not ok:
+        return None, False
+    diagram = obj.get("diagram")
+    if not isinstance(diagram, dict):
+        return None, True
+    return diagram, True
 
 
 def parse_kpi_json(text: str) -> list:
@@ -374,37 +411,41 @@ def fetch_release_text_sync(ticker: str, quarter_end_iso: str):
     return None, ""
 
 
-def _settle_reply(text: str, release_text: str, allow_empty: bool = True):
-    """Settle one extraction reply: (settled?, (items, diagram)).
-    Settled when the reply yields valid KPIs or a valid diagram.
-    A clean-empty parse settles only when allow_empty: the first
-    model that returns successfully must never settle on empty —
-    a small model often misses KPIs the next model finds (Batch 36:
-    BROS's release has KPIs, but the chain stopped after one empty
-    reply). Unsettled when the reply is garbled or everything in
-    it fails validation (try the next model)."""
-    items, draw_raw, ok = parse_kpi_response(text)
+def _settle_kpis_reply(text: str, release_text: str, allow_empty: bool = True):
+    """Phase-1 settle (Batch 40 split): (settled?, valid_items).
+    Settled when the reply yields valid KPIs. A clean-empty parse
+    settles only when allow_empty: the first model that returns
+    successfully must never settle on empty — a small model often
+    misses KPIs the next model finds (Batch 36: BROS's release has
+    KPIs, but the chain stopped after one empty reply). Unsettled
+    when the reply is garbled or everything in it fails validation
+    (try the next model). The diagram is a separate phase now, so
+    this function never looks at it."""
+    items, _draw_raw, ok = parse_kpi_response(text)
     if not ok:
         return False, None
     valid = validate_kpis(items, release_text)
-    diagram = validate_diagram(draw_raw)
-    if valid or diagram is not None:
-        return True, (valid, diagram)
-    if items == [] and draw_raw is None:
-        return (True, ([], None)) if allow_empty else (False, None)
+    if valid:
+        return True, valid
+    if items == []:
+        return (True, []) if allow_empty else (False, None)
     return False, None
 
 
 async def extract_kpis_async(release_text: str, llm_call=None, ai=None, api_key: str = "",
                              debug: dict | None = None):
-    """One extraction call down the story chain (Workers AI, then
+    """Two-phase extraction down the story chain (Workers AI, then
     gateway models, then direct OpenRouter), returning
-    (kpi items, diagram-or-None). No deterministic fallback: no
-    KPIs and no diagram is a valid, hiding result. debug (optional
-    dict, filled in place, Batch 38): {replies, settled_on,
-    last_parse_ok, last_reply_head} — the chain was returning 0
-    with no visibility into whether the fetch, the models, or the
-    settle rule was responsible."""
+    (kpi items, diagram-or-None). Phase 1 extracts KPIs alone;
+    phase 2 draws the diagram from the extracted KPIs, best-effort,
+    on the legs from the KPI winner onward. Batch 40 split: the
+    combined prompt's long JSON output timed out on Workers AI
+    (60s) while the story prompt completes, so each half runs
+    apart and finishes inside the timeout. No deterministic
+    fallback: no KPIs and no diagram is a valid, hiding result.
+    debug (optional dict, filled in place, Batches 38-39):
+    {replies, settled_on, last_parse_ok, last_reply_head, errors,
+    diagram} — replies counts phase-1 returns only."""
     system, user = kpi_prompt(release_text)
     # Batch 36: allow_empty turns on only from the SECOND model
     # that returns successfully — a single empty verdict never
@@ -424,69 +465,74 @@ async def extract_kpis_async(release_text: str, llm_call=None, ai=None, api_key:
             debug["last_reply_head"] = last_text[:200]
 
     def _fail(leg, exc):
-        # Batch 39: the chain was exhausting with replies: 0 and no
-        # visibility into HOW each leg failed (timeout vs instant
-        # error vs auth). Record the exception, truncated — error
-        # strings name the failure, never a secret.
+        # Batch 39: record HOW each leg failed (timeout vs instant
+        # error vs auth) — error strings name the failure, never
+        # a secret.
         if debug is not None:
             debug.setdefault("errors", []).append(
                 {"leg": leg, "error": f"{type(exc).__name__}: {exc}"[:160]})
 
-    def _finish(out):
-        if debug is not None:
-            valid, diagram = out
-            if valid:
-                debug["settled_on"] = "items"
-            elif diagram is not None:
-                debug["settled_on"] = "diagram"
-            else:
-                debug["settled_on"] = "empty"
-        return out
-
+    # Ordered legs: (name, async call, timeout). Phase 2 resumes
+    # from the phase-1 winner, so the legs list is built once.
+    legs = []
     if ai is not None:
+        legs.append(("workers_ai", lambda s, u: call_workers_ai(ai, WORKERS_AI_MODEL, s, u),
+                     WORKERS_AI_TIMEOUT_S))
+        for m in MODELS:
+            legs.append((f"gateway:{m}", lambda s, u, m=m: call_gateway_binding(ai, m, s, u),
+                         GATEWAY_TIMEOUT_S))
+    openrouter_caller = None
+    if llm_call is not None or api_key:
+        openrouter_caller = llm_call or (lambda model, s, u: _call_openrouter_async(model, s, u, api_key))
+        for m in MODELS:
+            legs.append((f"openrouter:{m}", lambda s, u, m=m: openrouter_caller(m, s, u), 60))
+
+    # Phase 1: KPIs alone.
+    items = None
+    winner = None
+    for idx, (leg, fn, timeout) in enumerate(legs):
         try:
-            result = await asyncio.wait_for(call_workers_ai(ai, WORKERS_AI_MODEL, system, user),
-                                            timeout=WORKERS_AI_TIMEOUT_S)
+            result = await asyncio.wait_for(fn(system, user), timeout=timeout)
             replies += 1
             _note((result or {}).get("text", ""))
-            settled, out = _settle_reply(last_text, release_text, allow_empty=replies > 1)
+            settled, valid = _settle_kpis_reply(last_text, release_text, allow_empty=replies > 1)
             if settled:
-                return _finish(out)
+                items = valid
+                winner = idx
+                break
         except Exception as exc:
-            _fail("workers_ai", exc)
-        for model in MODELS:
-            try:
-                result = await asyncio.wait_for(call_gateway_binding(ai, model, system, user),
-                                                timeout=GATEWAY_TIMEOUT_S)
-                replies += 1
-                _note((result or {}).get("text", ""))
-                settled, out = _settle_reply(last_text, release_text, allow_empty=replies > 1)
-                if settled:
-                    return _finish(out)
-            except Exception as exc:
-                _fail(f"gateway:{model}", exc)
-                continue
-    if llm_call is None and not api_key:
+            _fail(leg, exc)
+            continue
+    if items is None:
         if debug is not None:
-            debug["settled_on"] = "no_key"
+            # No OpenRouter leg to try at all (and the AI legs, if
+            # any, all failed) — the old "no_key" outcome.
+            debug["settled_on"] = "no_key" if openrouter_caller is None else "exhausted"
             debug["replies"] = replies
         return [], None
-    caller = llm_call or (lambda model, s, u: _call_openrouter_async(model, s, u, api_key))
-    for model in MODELS:
+    if debug is not None:
+        debug["settled_on"] = "items" if items else "empty"
+
+    # Phase 2: diagram from the extracted KPIs, best-effort. A
+    # failed diagram never loses the KPIs; it runs even on an
+    # empty KPI settle (a release can have a clear business model
+    # and no operating KPIs).
+    dsystem, duser = diagram_prompt(items, release_text)
+    diagram = None
+    for leg, fn, timeout in legs[winner:]:
         try:
-            result = await asyncio.wait_for(caller(model, system, user), timeout=60)
-            replies += 1
-            _note((result or {}).get("text", ""))
-            settled, out = _settle_reply(last_text, release_text, allow_empty=replies > 1)
-            if settled:
-                return _finish(out)
+            result = await asyncio.wait_for(fn(dsystem, duser), timeout=timeout)
+            draw_raw, ok = parse_diagram_response((result or {}).get("text", ""))
+            if ok:
+                diagram = validate_diagram(draw_raw)
+                if diagram is not None:
+                    break
         except Exception as exc:
-            _fail(f"openrouter:{model}", exc)
+            _fail(f"diagram:{leg}", exc)
             continue
     if debug is not None:
-        debug["settled_on"] = "exhausted"
-        debug["replies"] = replies
-    return [], None
+        debug["diagram"] = "ok" if diagram is not None else "none"
+    return items, diagram
 
 
 async def _call_openrouter_async(model: str, system: str, user: str, api_key: str) -> dict:
@@ -509,8 +555,9 @@ async def _call_openrouter_async(model: str, system: str, user: str, api_key: st
 def extract_kpis_sync(release_text: str, llm_call=None, api_key: str = "",
                       debug: dict | None = None):
     """Sync twin (Docker path): direct OpenRouter chain only,
-    returning (kpi items, diagram-or-None). debug: same Batch 38
-    telemetry dict as the async twin, filled in place."""
+    returning (kpi items, diagram-or-None). Same Batch 40
+    two-phase split as the async twin. debug: same Batches 38-39
+    telemetry dict, filled in place."""
     if llm_call is None and not api_key:
         if debug is not None:
             debug["settled_on"] = "no_key"
@@ -522,30 +569,64 @@ def extract_kpis_sync(release_text: str, llm_call=None, api_key: str = "",
     # verdict never ends the chain; only the second successful
     # reply may settle on empty.
     replies = 0
-    for model in MODELS:
+    last_text = ""
+    last_ok = False
+
+    def _note(text):
+        nonlocal last_text, last_ok
+        last_text = text or ""
+        last_ok = parse_kpi_response(last_text)[2]
+        if debug is not None:
+            debug["replies"] = replies
+            debug["last_parse_ok"] = last_ok
+            debug["last_reply_head"] = last_text[:200]
+
+    def _fail(leg, exc):
+        if debug is not None:
+            debug.setdefault("errors", []).append(
+                {"leg": leg, "error": f"{type(exc).__name__}: {exc}"[:160]})
+
+    # Phase 1: KPIs alone.
+    items = None
+    winner = None
+    for idx, model in enumerate(MODELS):
         try:
             result = caller(model, system, user)
             replies += 1
-            text = (result or {}).get("text", "") or ""
-            if debug is not None:
-                debug["replies"] = replies
-                debug["last_parse_ok"] = parse_kpi_response(text)[2]
-                debug["last_reply_head"] = text[:200]
-            settled, out = _settle_reply(text, release_text, allow_empty=replies > 1)
+            _note((result or {}).get("text", ""))
+            settled, valid = _settle_kpis_reply(last_text, release_text, allow_empty=replies > 1)
             if settled:
-                if debug is not None:
-                    valid, diagram = out
-                    debug["settled_on"] = "items" if valid else ("diagram" if diagram is not None else "empty")
-                return out
+                items = valid
+                winner = idx
+                break
         except Exception as exc:
-            if debug is not None:
-                debug.setdefault("errors", []).append(
-                    {"leg": f"openrouter:{model}", "error": f"{type(exc).__name__}: {exc}"[:160]})
+            _fail(f"openrouter:{model}", exc)
+            continue
+    if items is None:
+        if debug is not None:
+            debug["settled_on"] = "exhausted"
+            debug["replies"] = replies
+        return [], None
+    if debug is not None:
+        debug["settled_on"] = "items" if items else "empty"
+
+    # Phase 2: diagram from the extracted KPIs, best-effort.
+    dsystem, duser = diagram_prompt(items, release_text)
+    diagram = None
+    for model in MODELS[winner:]:
+        try:
+            result = caller(model, dsystem, duser)
+            draw_raw, ok = parse_diagram_response((result or {}).get("text", ""))
+            if ok:
+                diagram = validate_diagram(draw_raw)
+                if diagram is not None:
+                    break
+        except Exception as exc:
+            _fail(f"diagram:openrouter:{model}", exc)
             continue
     if debug is not None:
-        debug["settled_on"] = "exhausted"
-        debug["replies"] = replies
-    return [], None
+        debug["diagram"] = "ok" if diagram is not None else "none"
+    return items, diagram
 
 
 async def kpis_for_pack_async(ticker: str, quarter_end_iso: str, llm_call=None,
