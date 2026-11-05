@@ -281,7 +281,7 @@ table.analyst-table td.detail-cell { color: #3f3f46; font-size: 13px; }
    Analyst claims land. Same rule as the ledger: show output as it
    arrives, never blank placeholders up front. */
 .rail-right .chart-card, .rail-right #glance-card { display: none; }
-.rail-right.has-facts #chart-trend-card { display: block; }
+.rail-right.has-facts #chart-trend-card, .rail-right.has-facts #chart-vs-card, .rail-right.has-facts #chart-long-card { display: block; }
 .rail-right.has-claims #chart-growth-card, .rail-right.has-claims #chart-eps-card, .rail-right.has-claims #glance-card { display: block; }
 .rail-right.has-facts #charts-empty-state, .rail-right.has-claims #charts-empty-state { display: none; }
 .briefing-actions { margin-bottom: 1rem; }

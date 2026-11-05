@@ -52,7 +52,7 @@
       <span class="label">Most searched</span>
       <span id="most-chips"></span>
     </div>
-    <p class="hint">Search <a href="companies/">162 large-cap companies</a> by name or ticker — pick a match and its briefing runs. Every number traces to a filing.</p>
+    <p class="hint">Search <a href="companies/">167 large-cap companies</a> by name or ticker — pick a match and its briefing runs. Every number traces to a filing.</p>
   </section>
 
   <div class="layout">
@@ -189,6 +189,16 @@
           <span class="badge" id="b-beatmiss" hidden></span>
         </div>
         <h2 id="b-verdict" class="verdict"></h2>
+        <section class="card" id="sec-takeaways" hidden>
+          <h3>Takeaways</h3>
+          <ul id="b-takeaways" class="list"></ul>
+        </section>
+        <section class="card" id="sec-diagram" hidden>
+          <h3>How it makes money</h3>
+          <p class="meta"><span style="color:var(--green)">━━</span> money &nbsp; <span style="color:var(--muted-foreground)">┄┄</span> value</p>
+          <div id="b-diagram"></div>
+          <p class="meta">Simplified model — illustrative, from the company's earnings release.</p>
+        </section>
         <div class="briefing-actions">
           <button id="briefing-download" type="button" class="btn-secondary">Download briefing (.md)</button>
         </div>
@@ -212,6 +222,18 @@
         <section class="card" id="sec-drivers" hidden>
           <h3>What drove the quarter</h3>
           <ul id="b-drivers" class="list"></ul>
+        </section>
+
+        <section class="card" id="sec-kpis" hidden>
+          <h3>Company metrics</h3>
+          <ul id="b-kpis" class="list"></ul>
+          <p class="meta" id="b-kpis-note"></p>
+        </section>
+
+        <section class="card" id="sec-fineprint" hidden>
+          <h3>Fine print — what's new in the filings</h3>
+          <ul id="b-fineprint" class="list"></ul>
+          <p class="meta">LLM-surfaced from this quarter's and last quarter's 10-Q filings and the earnings release. Not Critic-verified; quotes and numbers are verbatim from the filings.</p>
         </section>
 
         <section class="card" id="sec-market" hidden>
@@ -251,7 +273,28 @@
         <div id="comparison-headline"></div>
         <h4>All claims</h4>
         <div id="comparison-table"></div>
+        <div id="comparison-units" hidden></div>
         <div class="briefing-actions"><button type="button" class="btn-secondary" id="comparison-share">Copy comparison link</button></div>
+      </section>
+
+      <section id="ownership" hidden>
+        <h3 id="ownership-title">Who's trading it</h3>
+        <p class="body-text">Company-level activity, not tied to this quarter. Shown as reported — no interpretation.</p>
+        <section class="card" id="own-insiders-card" hidden>
+          <h3>Insiders</h3>
+          <div id="own-insiders"></div>
+          <p class="meta">Derived from SEC Form 4 filings, via Nasdaq.</p>
+        </section>
+        <section class="card" id="own-funds-card" hidden>
+          <h3>Funds</h3>
+          <div id="own-funds"></div>
+          <p class="meta">From 13F filings, via Nasdaq — quarterly data, up to 45 days stale by construction.</p>
+        </section>
+        <section class="card" id="own-politicians-card" hidden>
+          <h3>Politicians</h3>
+          <div id="own-politicians"></div>
+          <p class="meta">Amounts are ranges as disclosed (STOCK Act); filings may lag trades by up to 45 days. Source: Veridion Markets, from official government filings.</p>
+        </section>
       </section>
     </main>
 
@@ -267,6 +310,8 @@
         <div class="chart-switch" role="group" aria-label="Trend metric">
           <button type="button" class="chart-switch-btn is-active" data-trend-metric="total_revenue">Revenue</button>
           <button type="button" class="chart-switch-btn" data-trend-metric="operating_income">Operating income</button>
+          <button type="button" class="chart-switch-btn" data-trend-metric="net_income">Net income</button>
+          <button type="button" class="chart-switch-btn" data-trend-metric="ebitda">EBITDA</button>
         </div>
         <div class="chart-wrap"><canvas id="chart-trend" height="190"></canvas></div>
         <p class="chart-empty" id="chart-trend-empty">Run a briefing — this chart fills from its Scout facts.</p>
@@ -286,6 +331,21 @@
         <p class="chart-empty" id="chart-eps-empty">No EPS-vs-consensus claim in the latest run yet.</p>
         <div class="chart-wrap chart-doughnut"><canvas id="chart-margin" height="150"></canvas></div>
         <p class="chart-empty" id="chart-margin-empty">Operating margin appears here once the Analyst reports it.</p>
+      </section>
+
+      <section class="card chart-card" id="chart-vs-card">
+        <h3>Total return vs <span id="chart-vs-metric">revenue</span></h3>
+        <p class="rail-hint">Both series rebased to 0% at their first common quarter. Total return reinvests dividends at the ex-date close — an approximation.</p>
+        <div class="chart-wrap"><canvas id="chart-vs" height="190"></canvas></div>
+        <p class="chart-empty" id="chart-vs-empty">Run a briefing — this chart fills from the company's long history.</p>
+      </section>
+
+      <section class="card chart-card" id="chart-long-card">
+        <h3>Long series: <span id="chart-long-metric">revenue</span></h3>
+        <p class="rail-hint">Up to 40 quarters of the selected metric, from SEC filings.</p>
+        <div class="chart-wrap"><canvas id="chart-long" height="190"></canvas></div>
+        <p class="chart-empty" id="chart-long-empty">Run a briefing — this chart fills from the company's long history.</p>
+        <p class="meta" id="chart-long-read" hidden></p>
       </section>
 
       <section class="card rail-card" id="glance-card">
