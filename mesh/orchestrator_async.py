@@ -54,12 +54,19 @@ async def _emit(on_event, event: dict):
 
 
 async def run_briefing_async(ticker: str, scout_fn, analyst_fn, critic_fn, writer_fn=None,
+                             writer_steps_fn=None,
                              on_event=None, resume_from=None) -> Briefing:
     """scout_fn(ticker) -> awaitable EvidencePack dict
     analyst_fn(pack dict) -> awaitable Analysis dict
     critic_fn(pack dict, analysis dict) -> awaitable Critique dict
     writer_fn(pack dict, analysis dict, trace_id) -> awaitable Briefing dict
     (optional; defaults to local write_briefing).
+    writer_steps_fn(pack dict, analysis dict, trace_id) -> awaitable
+    (story_result, kpi_result, fine_print_result) — Batch 34: when
+    given, the Writer step runs through it (the cloud path: three
+    parallel Writer mode calls, one invocation per step, so each
+    gets its own CPU budget) and the Briefing is assembled here
+    with write_briefing. Takes precedence over writer_fn.
     on_event(event dict) -> optional callback, sync or async,
     called once per pipeline step with the step's outcome.
     resume_from (optional dict with "pack"/"analysis"/"critique")
@@ -135,6 +142,24 @@ async def run_briefing_async(ticker: str, scout_fn, analyst_fn, critic_fn, write
         raise CriticFailed(critique_data.get("issues", []))
 
     started = time.monotonic()
+    if writer_steps_fn is not None:
+        # Batch 34: the three Writer steps arrive separately
+        # (three parallel Writer mode calls); the Briefing is
+        # assembled here. story_result is never None from a
+        # mode call (a timed-out story chain returns the
+        # deterministic story), so write_briefing never falls
+        # back to its sync build_story path on a Worker.
+        story_result, kpi_result, fine_print_result = await writer_steps_fn(pack_data, analysis_data, trace_id)
+        briefing = write_briefing(pack, analysis, trace_id,
+                                  story_result=story_result,
+                                  kpi_result=kpi_result,
+                                  fine_print_result=fine_print_result)
+        writer_ms = int((time.monotonic() - started) * 1000)
+        await _emit(on_event, {"event": "writer_done",
+                               "story_model": briefing.story_model,
+                               "duration_ms": writer_ms,
+                               "story": briefing.story})
+        return briefing
     if writer_fn is not None:
         briefing_data = await writer_fn(pack_data, analysis_data, trace_id)
         writer_ms = int((time.monotonic() - started) * 1000)
