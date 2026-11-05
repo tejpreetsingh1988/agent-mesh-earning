@@ -3,11 +3,13 @@
 collect_evidence_async mirrors collect_evidence step for step
 (same order, same quarter-end priority, same missing notes, same
 EDGAR overlay and cross-check), except every tool call is
-awaited. Quarter logic is imported from scout.py, not copied,
-so a quarter-rule fix lands in both paths at once; the
-orchestration itself is mirrored by hand because Python has no
-sync/async-generic function — a comment here marks the mirror
-so a future edit to scout.py is checked against this file too.
+awaited. Most quarter logic is imported from scout.py — but
+NOT all of it: the consensus guard below and the quarter-end
+chain are hand-mirrored, and Batch 20 proved the mirror drifts
+(the sync guard went month-granular while this one stayed
+exact-date, silently discarding every fiscal quarter's
+consensus). A future edit to scout.py's quarter logic MUST be
+checked against this file too, and vice versa.
 
 Sync collect_evidence stays untouched for Docker, the eval
 harness and the Streamlit path. This module is imported only
@@ -29,7 +31,7 @@ from datetime import date, datetime, timezone
 from .schemas import EvidencePack, Fact, SourceRef
 from .scout import (_QUARTERS, _month_end_from_nasdaq, _now,
                      _pick_quarter_filing, _quarter_end_from_label,
-                     _quarter_label, _shift_days)
+                     _quarter_label, _same_fiscal_month, _shift_days)
 
 
 async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
@@ -264,10 +266,15 @@ async def collect_evidence_async(ticker: str, mcp_call, quarter: str = "") -> Ev
         missing.append(f"get_consensus_estimates failed: {e}")
 
     # Requested quarter: discard a consensus row for a different
-    # quarter end (see scout.py).
+    # quarter end (see scout.py). Month granularity, like the
+    # sync guard: Nasdaq's month-end and a fiscal actual end
+    # (e.g. 2026-04-30 vs 2026-04-26) are the same quarter.
+    # Batch 20 fix: this guard was exact-date while the sync
+    # guard went month-granular, so every fiscal quarter's
+    # consensus was discarded on the cloud path.
     if requested_end and isinstance(consensus, dict) and consensus.get("fiscal_quarter_ending"):
         cons_end = _month_end_from_nasdaq(consensus["fiscal_quarter_ending"])
-        if cons_end and cons_end != requested_end:
+        if cons_end and not _same_fiscal_month(cons_end, requested_end):
             missing.append(f"Consensus row is for the quarter ending {cons_end}, not the requested {requested_end} — consensus not used for beat/miss.")
             consensus = None
 
