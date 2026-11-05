@@ -73,7 +73,7 @@ def _critic() -> None:
 def _writer() -> None:
     base = (ROOT / "agents" / "writer" / "main.py").read_text()
     base = base.replace("from mesh.writer import write_briefing",
-                        "from mesh.story_async import build_story_async\nfrom mesh.worker_env import ai_binding, worker_env_value\nfrom mesh.writer import write_briefing")
+                        "from mesh.fineprint import fineprint_for_pack_async\nfrom mesh.kpi import kpis_for_pack_async\nfrom mesh.story_async import build_story_async\nfrom mesh.worker_env import ai_binding, worker_env_value\nfrom mesh.writer import write_briefing")
     base = base.replace("def _handler(payload: dict) -> dict:",
                         "async def _handler(payload: dict) -> dict:")
     # The key is passed explicitly from the Worker env object:
@@ -91,14 +91,45 @@ def _writer() -> None:
     # ADR 015). The GATEWAY_OPENROUTER_URL variable is no longer
     # read: the first gateway attempt (HTTPS, no header) 401'd
     # under Authenticated Gateway, and the binding replaces it.
-    base = base.replace("return write_briefing(pack, analysis, trace_id).model_dump(mode=\"json\")",
-                        "return write_briefing(pack, analysis, trace_id, story_result=await build_story_async(pack, analysis, api_key=worker_env_value(\"OPENROUTER_API_KEY\"), ai=ai_binding())).model_dump(mode=\"json\")")
+    # Batch 22: the sync handler's KPI call (urllib) cannot run in
+    # a Worker, so the proof replaces it with the async KPI step
+    # on the same ai/key context as the story call. The KPI step
+    # is best-effort inside kpis_for_pack_async; it never raises
+    # to the briefing.
+    base = base.replace(
+        "    # KPI step (Batch 22) + diagram spec (Batch 23, same call):\n"
+        "    # best-effort, after the Critic gate, never blocking.\n"
+        "    # kpis_for_pack_sync already swallows its own errors; the\n"
+        "    # outer guard is belt-and-suspenders so a KPI failure can\n"
+        "    # never break a verified briefing.\n"
+        "    try:\n"
+        "        items, diagram, url = kpis_for_pack_sync(\n"
+        "            pack.ticker, pack.quarter_end.isoformat(),\n"
+        "            api_key=os.environ.get(\"OPENROUTER_API_KEY\", \"\"))\n"
+        "        kpi_result = {\"items\": items, \"diagram\": diagram, \"source_url\": url}\n"
+        "    except Exception:\n"
+        "        kpi_result = None\n"
+        "    # Fine-print step (Batch 30): LLM-surfaced new/changed 10-Q\n"
+        "    # passages, best-effort like KPIs, never blocking.\n"
+        "    try:\n"
+        "        fp_items, fp_urls = fineprint_for_pack_sync(\n"
+        "            pack.ticker, pack.quarter_end.isoformat(), pack.quarter_label,\n"
+        "            api_key=os.environ.get(\"OPENROUTER_API_KEY\", \"\"))\n"
+        "        fine_print_result = {\"items\": fp_items, \"source_urls\": fp_urls}\n"
+        "    except Exception:\n"
+        "        fine_print_result = None\n"
+        "    return write_briefing(pack, analysis, trace_id, kpi_result=kpi_result, fine_print_result=fine_print_result).model_dump(mode=\"json\")",
+        "    story = await build_story_async(pack, analysis, api_key=worker_env_value(\"OPENROUTER_API_KEY\"), ai=ai_binding())\n"
+        "    kpi_items, kpi_diagram, kpi_url = await kpis_for_pack_async(pack.ticker, pack.quarter_end.isoformat(), ai=ai_binding(), api_key=worker_env_value(\"OPENROUTER_API_KEY\"))\n"
+        "    fp_items, fp_urls = await fineprint_for_pack_async(pack.ticker, pack.quarter_end.isoformat(), pack.quarter_label, ai=ai_binding(), api_key=worker_env_value(\"OPENROUTER_API_KEY\"))\n"
+        "    return write_briefing(pack, analysis, trace_id, story_result=story, kpi_result={\"items\": kpi_items, \"diagram\": kpi_diagram, \"source_url\": kpi_url}, fine_print_result={\"items\": fp_items, \"source_urls\": fp_urls}).model_dump(mode=\"json\")")
     base = base.replace('app = create_app("writer", handler=_handler)',
                         'app = create_app("writer", async_handler=_handler)')
     _sync("writer",
           ["__init__.py", "schemas.py", "writer.py", "llm.py", "story_async.py",
            "worker_env.py", "worker_ai.py", "gateway_binding.py",
-           "agent_app.py", "cards.py", "auth.py", "worker_http.py"],
+           "agent_app.py", "cards.py", "auth.py", "worker_http.py",
+           "kpi.py", "fineprint.py", "edgar.py"],
           base + ENTRYPOINT)
 
 
@@ -106,7 +137,12 @@ def _orchestrator() -> None:
     base = (ROOT / "apps" / "orchestrator" / "worker_main.py").read_text()
     _sync("orchestrator",
           ["__init__.py", "schemas.py", "orchestrator.py", "orchestrator_async.py",
-           "writer.py", "llm.py", "agent_app.py", "cards.py", "auth.py", "worker_http.py"],
+           "writer.py", "llm.py", "agent_app.py", "cards.py", "auth.py", "worker_http.py",
+           "ownership.py", "history.py", "edgar.py",
+           # history.py -> async_tools.py, whose closure is
+           # stdlib-only (same set the critic proof vendors):
+           "async_tools.py", "edgar_facts.py", "consensus.py", "transcript.py",
+           "market.py"],
           base + ENTRYPOINT)
 
 
