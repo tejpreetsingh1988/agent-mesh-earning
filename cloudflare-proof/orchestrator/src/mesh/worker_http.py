@@ -39,6 +39,19 @@ class WorkerHTTPError(Exception):
         self.url = url
 
 
+# Batch 35 (Nov 5, 2026): retry policy for fetch_bytes. EDGAR
+# rate-limits the Workers' shared egress IPs (HTTP 429); a
+# single 429 used to kill a whole fetch (Scout, fine-print and
+# KPI fetches all start with company_tickers.json). Three
+# attempts with backoff: worst case ~3x30s + 10s delays, bounded
+# by each caller's own deadline (the fine-print step's 180s,
+# the Orchestrator's 300s agent timeout).
+FETCH_RETRY_ATTEMPTS = 3
+FETCH_RETRY_DELAYS_S = (2, 8)
+FETCH_ATTEMPT_TIMEOUT_S = 30
+_RETRYABLE_STATUS = (429, 500, 502, 503, 504)
+
+
 def _pyfetch():
     """Return pyodide.http.pyfetch, or None outside a Worker."""
     try:
@@ -49,25 +62,67 @@ def _pyfetch():
 
 
 async def fetch_bytes(url: str, headers: dict | None = None) -> bytes:
+    """One GET with retries on transient failures (Batch 35).
+
+    EDGAR rate-limits the Workers' shared egress IPs (HTTP 429):
+    the Scout hit it on company_tickers.json, and the fine-print
+    step's 10-Q fetch died on it — 0 items for NVDA despite 12
+    real passages waiting (the step's wall was 31s of waiting
+    with 32ms CPU, i.e. the fetch failed before any parsing).
+    The KPI fetch has the same exposure (it starts with the same
+    company_tickers.json call). Retrying here fixes every EDGAR
+    caller at once. 4xx other than 429 is permanent (a 404 means
+    the document does not exist) and is never retried. The
+    pyfetch await also gains a per-attempt timeout: it had none,
+    so a hung response could eat a whole step budget."""
     pyfetch = _pyfetch()
-    if pyfetch is not None:
-        resp = await pyfetch(url, headers=headers or {})
-        if resp.status != 200:
-            raise WorkerHTTPError(resp.status, url)
-        data = await resp.bytes()
-        return bytes(data)
-    def _sync() -> bytes:
-        req = urllib.request.Request(url, headers=headers or {})
+    last_exc: Exception | None = None
+    for attempt in range(FETCH_RETRY_ATTEMPTS):
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
-                raw = r.read()
-                if r.headers.get("Content-Encoding") == "gzip":
-                    raw = gzip.decompress(raw)
-                return raw
-        except urllib.error.HTTPError as e:
-            # Translate so callers see one error type on both paths.
-            raise WorkerHTTPError(e.code, url) from None
-    return await asyncio.to_thread(_sync)
+            if pyfetch is not None:
+                resp = await asyncio.wait_for(
+                    pyfetch(url, headers=headers or {}),
+                    timeout=FETCH_ATTEMPT_TIMEOUT_S)
+                if resp.status != 200:
+                    raise WorkerHTTPError(resp.status, url)
+                data = await resp.bytes()
+                return bytes(data)
+            return await asyncio.to_thread(_sync_fetch_once, url, headers)
+        except Exception as e:  # noqa: BLE001 - retried below, re-raised at the end
+            last_exc = e
+            if not _retryable(e) or attempt == FETCH_RETRY_ATTEMPTS - 1:
+                raise
+            delay = FETCH_RETRY_DELAYS_S[min(attempt, len(FETCH_RETRY_DELAYS_S) - 1)]
+            await asyncio.sleep(delay)
+    raise last_exc  # pragma: no cover - the loop always raises or returns
+
+
+def _retryable(exc: Exception) -> bool:
+    """Transient (worth retrying) vs permanent failures."""
+    if isinstance(exc, WorkerHTTPError):
+        return exc.code in _RETRYABLE_STATUS
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return True
+    # Network errors (connection reset, DNS, remote closed) are
+    # transient; anything else (a programming error in the
+    # caller, a bad URL) is not — but it is safer to retry a
+    # transport error once than to drop a briefing on it, so
+    # transport-shaped errors retry and the loop still caps at
+    # FETCH_RETRY_ATTEMPTS.
+    return isinstance(exc, (OSError, ConnectionError))
+
+
+def _sync_fetch_once(url: str, headers: dict | None) -> bytes:
+    req = urllib.request.Request(url, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            raw = r.read()
+            if r.headers.get("Content-Encoding") == "gzip":
+                raw = gzip.decompress(raw)
+            return raw
+    except urllib.error.HTTPError as e:
+        # Translate so callers see one error type on both paths.
+        raise WorkerHTTPError(e.code, url) from None
 
 
 async def fetch_json(url: str, headers: dict | None = None):
