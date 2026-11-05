@@ -165,3 +165,79 @@ def test_async_q2_mirror():
     assert str(pack.quarter_end) == "2026-06-30"
     assert pack.report_date.date().isoformat() == "2026-07-29"
     assert all(f.period <= "2026-06-30" for f in pack.facts)
+
+
+# ---- Batch 20 — fiscal quarters (non-calendar month ends) ----
+
+def test_quarter_end_from_label_fiscal():
+    assert _quarter_end_from_label("quarter ended 2026-07-26") == "2026-07-26"
+    assert _quarter_end_from_label("quarter ended 2026-01-25") == "2026-01-25"
+    assert _quarter_end_from_label("quarter ended 2026-02-30") is None
+    assert _quarter_end_from_label("quarter ended 2026-7-6") is None
+    assert _quarter_end_from_label("quarter ended bogus") is None
+
+
+def test_pick_quarter_filing_month_granularity():
+    # Nasdaq probes a fiscal quarter as month/year, so its month-end
+    # (2026-07-31) must confirm a mid-month actual end (2026-07-26).
+    cands = [{"filingDate": "2026-08-05", "accessionNumber": "a1"},
+             {"filingDate": "2026-08-26", "accessionNumber": "a2"}]
+    assert _pick_quarter_filing(cands, "2026-07-26", {"a1": None, "a2": "2026-07-31"}) == (cands[1], True)
+    # A different month is still a mismatch, not a confirmation.
+    assert _pick_quarter_filing(cands, "2026-07-26", {"a1": None, "a2": "2026-08-31"}) == (cands[0], False)
+
+
+def _nvda_mcp_call(server, tool, args):
+    if server == "filings" and tool == "get_company_facts":
+        return {"company_name": "NVIDIA Corporation"}
+    if server == "filings" and tool == "list_recent_filings":
+        return {"filings": [
+            {"form": "8-K", "filingDate": "2026-08-05", "accessionNumber": "other",
+             "primaryDocument": "d.htm", "reportDate": "2026-08-05"},
+            {"form": "8-K", "filingDate": "2026-08-26", "accessionNumber": "nq2",
+             "primaryDocument": "d.htm", "reportDate": "2026-08-26"},
+            {"form": "8-K", "filingDate": "2026-11-18", "accessionNumber": "nq3",
+             "primaryDocument": "d.htm", "reportDate": "2026-11-18"},
+        ]}
+    if server == "filings" and tool == "get_filing_text":
+        return {}
+    if server == "filings" and tool == "get_filing_facts":
+        return {"facts": [
+            {"id": "edgar_rev_2026-07-26", "metric": "total_revenue", "value": 57.0,
+             "unit": "USD_B", "period": "2026-07-26", "source_tag": "Revenues", "form": "10-Q"},
+        ]}
+    if server == "market" and tool == "get_quarterly_history":
+        return {"quarters": [
+            {"period_end": "2025-10-26", "total_revenue": 51.0e9, "operating_income": 31.0e9},
+            {"period_end": "2026-01-25", "total_revenue": 54.0e9, "operating_income": 33.0e9},
+            {"period_end": "2026-04-26", "total_revenue": 56.0e9, "operating_income": 34.0e9},
+            {"period_end": "2026-07-26", "total_revenue": 57.0e9, "operating_income": 35.0e9},
+            {"period_end": "2026-10-26", "total_revenue": 60.0e9, "operating_income": 37.0e9},
+        ]}
+    if server == "market" and tool == "get_price_reaction":
+        return {}
+    if server == "filings" and tool == "get_transcript_excerpt":
+        return {"status": "unavailable"}
+    if server == "estimates_news" and tool == "get_consensus_estimates":
+        if args.get("report_date") == "2026-08-26":
+            return {"status": "available", "fiscal_quarter_ending": "Jul/2026",
+                    "eps_estimate": 4.0, "eps_reported": 4.2, "num_estimates": 12}
+        return {"status": "unavailable", "reason": "no row"}
+    raise AssertionError(f"unexpected call {server}/{tool}")
+
+
+def test_fiscal_quarter_selects_fiscal_filing_and_truncates():
+    pack = collect_evidence("NVDA", _nvda_mcp_call, quarter="quarter ended 2026-07-26")
+    assert pack.status == "REPORTED"
+    assert pack.quarter_label == "quarter ended 2026-07-26"
+    assert str(pack.quarter_end) == "2026-07-26"
+    # The earnings 8-K (2026-08-26), confirmed by the Jul/2026 probe
+    # at month granularity — not the unconfirmed 2026-08-05 candidate.
+    assert pack.report_date.date().isoformat() == "2026-08-26"
+    assert all(f.period <= "2026-07-26" for f in pack.facts)
+    assert any(f.period == "2026-07-26" and f.source.publisher == "SEC EDGAR" for f in pack.facts)
+    # Consensus survives the month-granularity guard, so beat/miss
+    # still works for a fiscal quarter.
+    assert pack.consensus["fiscal_quarter_ending"] == "Jul/2026"
+    assert not any("could not confirm" in m.lower() for m in pack.missing)
+    assert not any("not used for beat/miss" in m for m in pack.missing)
