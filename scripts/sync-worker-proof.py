@@ -73,7 +73,7 @@ def _critic() -> None:
 def _writer() -> None:
     base = (ROOT / "agents" / "writer" / "main.py").read_text()
     base = base.replace("from mesh.writer import write_briefing",
-                        "from mesh.writer_pipeline import run_writer_steps_async\nfrom mesh.worker_env import ai_binding, worker_env_value\nfrom mesh.writer import write_briefing")
+                        "from mesh.writer_pipeline import run_writer_steps_async, run_story_step_async, run_kpi_step_async, run_fineprint_step_async\nfrom mesh.worker_env import ai_binding, worker_env_value\nfrom mesh.writer import write_briefing")
     base = base.replace("def _handler(payload: dict) -> dict:",
                         "async def _handler(payload: dict) -> dict:")
     # The key is passed explicitly from the Worker env object:
@@ -96,25 +96,54 @@ def _writer() -> None:
     # on the same ai/key context as the story call. The KPI step
     # is best-effort inside kpis_for_pack_async; it never raises
     # to the briefing.
+    # Batch 34 (Nov 5, 2026): the three mode branches each map
+    # to their async step function (one Writer invocation per
+    # step, each with its own 2,000ms CPU budget — the single
+    # invocation kept dying at exactly 2,010ms on GOOGL).
     base = base.replace(
-        "    # KPI step (Batch 22) + diagram spec (Batch 23, same call):\n"
+        "        return {\"story_result\": build_story(pack, analysis, api_key=api_key)}",
+        "        return {\"story_result\": await run_story_step_async(pack, analysis, api_key=worker_env_value(\"OPENROUTER_API_KEY\"), ai=ai_binding())}")
+    base = base.replace(
+        "    if mode == \"kpi\":\n"
+        "        # KPI step (Batch 22) + diagram spec (Batch 23, same call):\n"
+        "        # best-effort, after the Critic gate, never blocking.\n"
+        "        try:\n"
+        "            items, diagram, url = kpis_for_pack_sync(\n"
+        "                pack.ticker, pack.quarter_end.isoformat(), api_key=api_key)\n"
+        "            return {\"kpi_result\": {\"items\": items, \"diagram\": diagram, \"source_url\": url}}\n"
+        "        except Exception:\n"
+        "            return {\"kpi_result\": {\"items\": [], \"diagram\": None, \"source_url\": \"\"}}",
+        "    if mode == \"kpi\":\n"
+        "        return {\"kpi_result\": await run_kpi_step_async(pack, api_key=worker_env_value(\"OPENROUTER_API_KEY\"), ai=ai_binding())}")
+    base = base.replace(
+        "    if mode == \"fineprint\":\n"
+        "        # Fine-print step (Batch 30): LLM-surfaced new/changed 10-Q\n"
+        "        # passages, best-effort like KPIs, never blocking.\n"
+        "        try:\n"
+        "            fp_items, fp_urls = fineprint_for_pack_sync(\n"
+        "                pack.ticker, pack.quarter_end.isoformat(), pack.quarter_label,\n"
+        "                api_key=api_key)\n"
+        "            return {\"fine_print_result\": {\"items\": fp_items, \"source_urls\": fp_urls}}\n"
+        "        except Exception:\n"
+        "            return {\"fine_print_result\": {\"items\": [], \"source_urls\": []}}",
+        "    if mode == \"fineprint\":\n"
+        "        return {\"fine_print_result\": await run_fineprint_step_async(pack, api_key=worker_env_value(\"OPENROUTER_API_KEY\"), ai=ai_binding())}")
+    base = base.replace(
+        "    # Full briefing (no mode): the KPI + fine-print steps run\n"
         "    # best-effort, after the Critic gate, never blocking.\n"
         "    # kpis_for_pack_sync already swallows its own errors; the\n"
         "    # outer guard is belt-and-suspenders so a KPI failure can\n"
         "    # never break a verified briefing.\n"
         "    try:\n"
         "        items, diagram, url = kpis_for_pack_sync(\n"
-        "            pack.ticker, pack.quarter_end.isoformat(),\n"
-        "            api_key=os.environ.get(\"OPENROUTER_API_KEY\", \"\"))\n"
+        "            pack.ticker, pack.quarter_end.isoformat(), api_key=api_key)\n"
         "        kpi_result = {\"items\": items, \"diagram\": diagram, \"source_url\": url}\n"
         "    except Exception:\n"
         "        kpi_result = None\n"
-        "    # Fine-print step (Batch 30): LLM-surfaced new/changed 10-Q\n"
-        "    # passages, best-effort like KPIs, never blocking.\n"
         "    try:\n"
         "        fp_items, fp_urls = fineprint_for_pack_sync(\n"
         "            pack.ticker, pack.quarter_end.isoformat(), pack.quarter_label,\n"
-        "            api_key=os.environ.get(\"OPENROUTER_API_KEY\", \"\"))\n"
+        "            api_key=api_key)\n"
         "        fine_print_result = {\"items\": fp_items, \"source_urls\": fp_urls}\n"
         "    except Exception:\n"
         "        fine_print_result = None\n"
