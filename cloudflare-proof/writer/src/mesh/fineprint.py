@@ -79,20 +79,37 @@ def _item_matches(text: str) -> list[tuple[int, int]]:
     return [(m.start(), int(m.group(1))) for m in ITEM_RE.finditer(text or "")]
 
 
+def _is_cross_ref(text: str, m) -> bool:
+    """True when an "Item N" match is a cross-reference to
+    another filing, not a section heading in this document:
+    "Item 8 in our Annual Report on Form 10-K", "Item 1A of
+    this Quarterly Report", "Item 7A ... in our Annual Report".
+    Proven Nov 5, 2026 on GOOGL's 10-Q: an "Item 8 in our
+    Annual Report" cross-reference 1,817 chars into the MD&A
+    truncated the whole section (the old rule only guarded
+    against references to SMALLER item numbers). A real heading
+    is followed by its title, never by a filing reference."""
+    window = text[m.end():m.end() + 80].lower()
+    return any(p in window for p in (
+        "annual report", "quarterly report", "form 10-k", "form 10-q"))
+
+
 def _section_end(text: str, start: int, item_no: int | None) -> int:
     """Offset where a section ends: the next "Item N" match whose
     number is greater than the section's own item number (so a
     cross-reference like "see Item 1A" inside Item 2 MD&A does
-    not end it early), else the end of the text. Capped at
-    SECTION_CAP chars from the start."""
+    not end it early), skipping cross-references to other
+    filings (see _is_cross_ref), else the end of the text.
+    Capped at SECTION_CAP chars from the start."""
     cap = min(len(text), start + SECTION_CAP)
     if item_no is None:
-        for off, _num in _item_matches(text):
-            if off > start:
-                return min(off, cap)
+        for m in ITEM_RE.finditer(text or ""):
+            if m.start() > start and not _is_cross_ref(text, m):
+                return min(m.start(), cap)
         return cap
-    for off, num in _item_matches(text):
-        if off > start and num > item_no:
+    for m in ITEM_RE.finditer(text or ""):
+        off, num = m.start(), int(m.group(1))
+        if off > start and num > item_no and not _is_cross_ref(text, m):
             return min(off, cap)
     return cap
 
@@ -118,15 +135,25 @@ def extract_sections(text: str) -> dict:
     out = {"mda": "", "notes": ""}
     if not text:
         return out
+    # Filers use curly apostrophes (U+2019) in headings
+    # ("Management’s Discussion") — the patterns below use
+    # straight quotes. Match against a normalized copy: the
+    # replacement is 1:1, so offsets line up with the original
+    # text, and the returned sections keep the filer's own
+    # characters (verbatim-quote validation stays exact).
+    # Proven Nov 5, 2026 on GOOGL's 10-Q: without this, every
+    # heading pattern missed and the notes section came back
+    # empty while MD&A landed on a cross-reference.
+    norm = text.replace("\u2019", "'").replace("\u2018", "'")
     # --- MD&A ---
     mda_start = None
     mda_no = None
-    mda_item = list(MDA_ITEM_RE.finditer(text))
+    mda_item = list(MDA_ITEM_RE.finditer(norm))
     if mda_item:
         mda_start = mda_item[-1].start()
         mda_no = 2
     else:
-        mda_bare = [m for m in MDA_RE.finditer(text) if not _is_continued(text, m)]
+        mda_bare = [m for m in MDA_RE.finditer(norm) if not _is_continued(norm, m)]
         if mda_bare:
             mda_start = mda_bare[-1].start()
             # MD&A is Item 2 of Part I in a 10-Q by structure;
@@ -135,18 +162,18 @@ def extract_sections(text: str) -> dict:
             # notes branch below).
             mda_no = 2
     if mda_start is not None:
-        out["mda"] = text[mda_start:_section_end(text, mda_start, mda_no)]
+        out["mda"] = text[mda_start:_section_end(norm, mda_start, mda_no)]
     # --- Notes ---
     notes_start = None
     notes_no = None
-    notes_item = list(NOTES_ITEM_RE.finditer(text))
+    notes_item = list(NOTES_ITEM_RE.finditer(norm))
     if notes_item:
         m = notes_item[-1]
         notes_start = m.start()
         notes_no = int(m.group(1))
     else:
         limit = mda_start if mda_start is not None else len(text)
-        for m in NOTES_RE.finditer(text):
+        for m in NOTES_RE.finditer(norm):
             if m.start() >= limit:
                 break
             # Skip "See accompanying Notes..." footer references
@@ -156,9 +183,9 @@ def extract_sections(text: str) -> dict:
             # real heading. (The LAST match would be a page
             # header near the end of the notes, leaving a
             # 380-char stub — proven on the real NVDA 10-Q.)
-            if "see accompanying" in text[max(0, m.start() - 40):m.start()].lower():
+            if "see accompanying" in norm[max(0, m.start() - 40):m.start()].lower():
                 continue
-            if _is_continued(text, m) or _is_toc_entry(text, m):
+            if _is_continued(norm, m) or _is_toc_entry(norm, m):
                 continue
             notes_start = m.start()
             break
@@ -175,10 +202,10 @@ def extract_sections(text: str) -> dict:
                 out["notes"] = text[notes_start:min(
                     mda_start, notes_start + SECTION_CAP)]
             else:
-                out["notes"] = text[notes_start:_section_end(text, notes_start, 1)]
+                out["notes"] = text[notes_start:_section_end(norm, notes_start, 1)]
             return out
     if notes_start is not None:
-        out["notes"] = text[notes_start:_section_end(text, notes_start, notes_no)]
+        out["notes"] = text[notes_start:_section_end(norm, notes_start, notes_no)]
     return out
 
 

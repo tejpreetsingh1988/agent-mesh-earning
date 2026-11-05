@@ -24,6 +24,22 @@ The Docker/sync path (agents/writer/main.py) stays sequential:
 it is not the live path, and its blocking calls cannot await.
 This module is the async twin used by the Writer proof, wired
 in by scripts/sync-worker-proof.py::_writer().
+
+Batch 34 (Nov 5, 2026): the three steps are ALSO callable
+individually (run_story_step_async / run_kpi_step_async /
+run_fineprint_step_async). The single-invocation Writer kept
+dying at exactly 2,010ms CPU on GOOGL — the three chains'
+parse/diff/validate together exceed the Workers Free CPU
+budget in Pyodide (the NVDA success already burned 1,445ms
+with KPIs skipped and fine print empty; local CPython profiles
+the framework at ~0ms and the fine-print parse at ~0.30s, so
+the multiplier is Pyodide itself). Wall-time parallelism
+cannot fix a CPU budget: the fix is to split the CPU across
+invocations. The Orchestrator now calls the Writer three
+times in parallel, one mode per call (mode=story / mode=kpi /
+mode=fineprint), each with its own 2,000ms budget, and
+assembles the Briefing itself. run_writer_steps_async (the
+gather) stays for the no-mode path and the Docker twin.
 """
 import asyncio
 
@@ -50,6 +66,38 @@ async def _with_deadline(coro, default):
         return default
 
 
+async def run_story_step_async(pack, analysis, api_key: str = "", ai=None):
+    """The story step alone: the LLM story (or the deterministic
+    story on timeout/failure). Never raises — a timed-out chain
+    returns the deterministic story, never a broken briefing."""
+    story_default = {"story": deterministic_story(pack, analysis),
+                     "model": "deterministic (Writer chain timed out)",
+                     "tokens_in": None, "tokens_out": None, "latency_s": None}
+    return await _with_deadline(
+        build_story_async(pack, analysis, api_key=api_key, ai=ai),
+        story_default)
+
+
+async def run_kpi_step_async(pack, api_key: str = "", ai=None):
+    """The KPI + diagram step alone, as a kpi_result dict.
+    Never raises — a failure returns the hiding result."""
+    items, diagram, url = await _with_deadline(
+        kpis_for_pack_async(pack.ticker, pack.quarter_end.isoformat(),
+                            ai=ai, api_key=api_key),
+        ([], None, ""))
+    return {"items": items, "diagram": diagram, "source_url": url}
+
+
+async def run_fineprint_step_async(pack, api_key: str = "", ai=None):
+    """The fine-print step alone, as a fine_print_result dict.
+    Never raises — a failure returns the hiding result."""
+    items, urls = await _with_deadline(
+        fineprint_for_pack_async(pack.ticker, pack.quarter_end.isoformat(),
+                                 pack.quarter_label, ai=ai, api_key=api_key),
+        ([], []))
+    return {"items": items, "source_urls": urls}
+
+
 async def run_writer_steps_async(pack, analysis, api_key: str = "", ai=None):
     """(story_dict, (kpi_items, kpi_diagram, kpi_url),
     (fp_items, fp_urls)) — the three Writer steps, run
@@ -57,20 +105,11 @@ async def run_writer_steps_async(pack, analysis, api_key: str = "", ai=None):
     the KPI and fine-print steps return empty on failure (the
     section hides), and the story falls back to the
     deterministic story."""
-    story_default = {"story": deterministic_story(pack, analysis),
-                     "model": "deterministic (Writer chain timed out)",
-                     "tokens_in": None, "tokens_out": None, "latency_s": None}
-    story, kpi_res, fp_res = await asyncio.gather(
-        _with_deadline(
-            build_story_async(pack, analysis, api_key=api_key, ai=ai),
-            story_default),
-        _with_deadline(
-            kpis_for_pack_async(pack.ticker, pack.quarter_end.isoformat(),
-                                ai=ai, api_key=api_key),
-            ([], None, "")),
-        _with_deadline(
-            fineprint_for_pack_async(pack.ticker, pack.quarter_end.isoformat(),
-                                     pack.quarter_label, ai=ai, api_key=api_key),
-            ([], [])),
+    story, kpi_result, fp_result = await asyncio.gather(
+        run_story_step_async(pack, analysis, api_key=api_key, ai=ai),
+        run_kpi_step_async(pack, api_key=api_key, ai=ai),
+        run_fineprint_step_async(pack, api_key=api_key, ai=ai),
     )
-    return story, kpi_res, fp_res
+    return story, (kpi_result["items"], kpi_result["diagram"],
+                   kpi_result["source_url"]), (fp_result["items"],
+                                               fp_result["source_urls"])
