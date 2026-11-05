@@ -304,3 +304,84 @@ def test_async_fiscal_quarter_keeps_month_granularity_consensus():
     assert pack.consensus is not None
     assert pack.consensus["fiscal_quarter_ending"] == "Apr/2026"
     assert not any("not used for beat/miss" in m for m in pack.missing)
+
+
+# ---- Nov 4, 2026 — requested-quarter candidate window (limit 300) ----
+
+def _window_filings():
+    # 120 filings, newest first (SEC order). The earnings 8-K sits
+    # at index 100 — outside a 50-row window, inside a 300-row one.
+    out = [{"form": "8-K", "filingDate": "2026-06-30", "accessionNumber": f"filler-{i}",
+            "primaryDocument": "d.htm", "reportDate": "2026-06-30"} for i in range(100)]
+    out.append({"form": "8-K", "filingDate": "2026-05-20", "accessionNumber": "earn-q1",
+                "primaryDocument": "d.htm", "reportDate": "2026-05-20"})
+    out.append({"form": "8-K", "filingDate": "2026-05-08", "accessionNumber": "pre-1",
+                "primaryDocument": "d.htm", "reportDate": "2026-05-08"})
+    out.append({"form": "8-K", "filingDate": "2026-04-27", "accessionNumber": "pre-2",
+                "primaryDocument": "d.htm", "reportDate": "2026-04-27"})
+    out += [{"form": "8-K", "filingDate": "2026-04-10", "accessionNumber": f"old-{i}",
+             "primaryDocument": "d.htm", "reportDate": "2026-04-10"} for i in range(17)]
+    return out
+
+
+def _window_mcp_call(server, tool, args):
+    if server == "filings" and tool == "get_company_facts":
+        return {"company_name": "NVIDIA Corporation"}
+    if server == "filings" and tool == "list_recent_filings":
+        # The fake honours the limit, like the real tool: the window
+        # is a client-side slice of the submissions recent array.
+        return {"filings": _window_filings()[: args.get("limit", 10)]}
+    if server == "filings" and tool == "get_filing_text":
+        return {}
+    if server == "filings" and tool == "get_filing_facts":
+        return {"facts": [
+            {"id": "edgar_rev_2026-04-26", "metric": "total_revenue", "value": 81.615,
+             "unit": "USD_B", "period": "2026-04-26", "source_tag": "Revenues", "form": "10-Q"},
+            {"id": "edgar_rev_2025-04-27", "metric": "total_revenue", "value": 44.062,
+             "unit": "USD_B", "period": "2025-04-27", "source_tag": "Revenues", "form": "10-Q"},
+        ]}
+    if server == "market" and tool == "get_quarterly_history":
+        return {"quarters": [
+            {"period_end": "2025-04-27", "total_revenue": 44.062e9, "operating_income": 21.6e9},
+            {"period_end": "2025-07-27", "total_revenue": 46.743e9, "operating_income": 28.4e9},
+            {"period_end": "2025-10-26", "total_revenue": 57.006e9, "operating_income": 36.0e9},
+            {"period_end": "2026-04-26", "total_revenue": 81.615e9, "operating_income": 53.5e9},
+        ]}
+    if server == "market" and tool == "get_price_reaction":
+        return {}
+    if server == "filings" and tool == "get_transcript_excerpt":
+        return {"status": "unavailable"}
+    if server == "estimates_news" and tool == "get_consensus_estimates":
+        if args.get("report_date") == "2026-05-20":
+            return {"status": "available", "fiscal_quarter_ending": "Apr/2026",
+                    "eps_estimate": None, "eps_reported": 2.39, "num_estimates": None}
+        return {"status": "unavailable", "reason": "no row"}
+    raise AssertionError(f"unexpected call {server}/{tool}")
+
+
+async def _window_mcp_call_async(server, tool, args):
+    return _window_mcp_call(server, tool, args)
+
+
+def test_requested_quarter_finds_earnings_8k_beyond_50_rows():
+    # NVDA, Nov 2026: the May 20, 2026 earnings 8-K sat beyond the
+    # old 50-row recent-filings window, so the April pick fell back
+    # to a June 30 non-earnings 8-K and consensus anchored to the
+    # wrong date. With the 300-row window the probe confirms it.
+    pack = collect_evidence("NVDA", _window_mcp_call, quarter="quarter ended 2026-04-26")
+    assert pack.status == "REPORTED"
+    assert pack.quarter_label == "quarter ended 2026-04-26"
+    assert pack.report_date.date().isoformat() == "2026-05-20"
+    assert pack.consensus is not None
+    assert pack.consensus["fiscal_quarter_ending"] == "Apr/2026"
+    assert pack.consensus["eps_reported"] == 2.39
+    assert not any("could not confirm" in m.lower() for m in pack.missing)
+
+
+def test_async_requested_quarter_finds_earnings_8k_beyond_50_rows():
+    pack = asyncio.run(collect_evidence_async(
+        "NVDA", _window_mcp_call_async, quarter="quarter ended 2026-04-26"))
+    assert pack.status == "REPORTED"
+    assert pack.report_date.date().isoformat() == "2026-05-20"
+    assert pack.consensus is not None
+    assert pack.consensus["fiscal_quarter_ending"] == "Apr/2026"

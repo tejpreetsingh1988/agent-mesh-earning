@@ -74,8 +74,15 @@ def test_fresh_pick_never_touches_companyfacts():
     # Every tag fresh, so no metric's pick needs the fallback.
     # (A fresh pick for one metric alone would still let other
     # metrics' empty picks trigger it — that is correct too.)
+    # The fixture carries BOTH a duration row (for flow
+    # metrics) and an instant row (for balance metrics:
+    # cash, short-term investments), so every metric's pick
+    # is fresh — otherwise the instant metrics' empty picks
+    # would correctly trigger the fallback and fail this test.
     def fresh_concept(cik, tag):
-        return _concept([_row("2026-07-01", "2026-09-30", 77.0e9)])
+        return _concept([_row("2026-07-01", "2026-09-30", 77.0e9),
+                         {"form": "10-Q", "end": "2026-09-30", "val": 77.0e9,
+                          "filed": "2026-01-01", "accn": "0000000000-00-000000"}])
 
     calls = []
 
@@ -135,7 +142,9 @@ def test_async_stale_pick_falls_back_to_companyfacts(monkeypatch):
 
 def test_async_fresh_pick_never_touches_companyfacts(monkeypatch):
     async def fresh_fetch(cik, tag):
-        return _concept([_row("2026-07-01", "2026-09-30", 77.0e9)])
+        return _concept([_row("2026-07-01", "2026-09-30", 77.0e9),
+                         {"form": "10-Q", "end": "2026-09-30", "val": 77.0e9,
+                          "filed": "2026-01-01", "accn": "0000000000-00-000000"}])
 
     calls = []
 
