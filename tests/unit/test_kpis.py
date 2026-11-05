@@ -141,7 +141,9 @@ def test_extract_kpis_async_drops_invented(monkeypatch):
     items, diagram = asyncio.run(kpi.extract_kpis_async(text, llm_call=fake_llm))
     assert [o["name"] for o in items] == ["Company-operated same shop sales"]
     assert diagram is None
-    assert len(calls) == 1
+    # Batch 40 split: phase 1 settles on m1 (1 call); phase 2 tries
+    # m1 then m2 for a diagram and finds none in the fake's reply.
+    assert calls == ["m1", "m1", "m2"]
 
 
 def test_extract_kpis_async_empty_list_needs_second_opinion(monkeypatch):
@@ -156,7 +158,8 @@ def test_extract_kpis_async_empty_list_needs_second_opinion(monkeypatch):
         return {"text": '{"kpis": []}'}
 
     assert asyncio.run(kpi.extract_kpis_async("release text", llm_call=fake_llm)) == ([], None)
-    assert calls == ["m1", "m2"]
+    # Batch 40 split: phase 2 tries m2 once for a diagram after the empty settle.
+    assert calls == ["m1", "m2", "m2"]
 
 
 def test_extract_kpis_async_first_empty_then_valid(monkeypatch):
@@ -175,7 +178,8 @@ def test_extract_kpis_async_first_empty_then_valid(monkeypatch):
     text = "Company-operated same shop sales increased 5.4%."
     items, diagram = asyncio.run(kpi.extract_kpis_async(text, llm_call=fake_llm))
     assert [o["name"] for o in items] == ["Company-operated same shop sales"]
-    assert calls == ["m1", "m2"]
+    # Batch 40 split: phase 2 tries m2 once for a diagram after the KPI settle.
+    assert calls == ["m1", "m2", "m2"]
 
 
 def test_extract_kpis_sync_first_empty_then_valid(monkeypatch):
@@ -193,7 +197,8 @@ def test_extract_kpis_sync_first_empty_then_valid(monkeypatch):
     text = "Company-operated same shop sales increased 5.4%."
     items, diagram = kpi.extract_kpis_sync(text, llm_call=fake_llm)
     assert [o["name"] for o in items] == ["Company-operated same shop sales"]
-    assert calls == ["m1", "m2"]
+    # Batch 40 split: phase 2 tries m2 once for a diagram after the KPI settle.
+    assert calls == ["m1", "m2", "m2"]
 
 
 def test_extract_kpis_async_all_models_fail(monkeypatch):
@@ -238,7 +243,11 @@ def test_kpi_prompt_excludes_standard_financials():
     system, user = kpi.kpi_prompt("release")
     assert "Do NOT include revenue" in user
     assert "outlook" in user.lower()
-    assert "diagram" in user
+    # Batch 40 split: the KPI prompt no longer asks for a diagram;
+    # the diagram lives in diagram_prompt.
+    assert "diagram" not in user
+    _system, duser = kpi.diagram_prompt([{"name": "Same-shop sales"}], "release")
+    assert "diagram" in duser
 
 
 def test_extract_kpis_async_returns_valid_diagram():
@@ -325,3 +334,79 @@ def test_extract_kpis_async_debug_records_leg_errors(monkeypatch):
     assert debug["settled_on"] == "exhausted"
     assert [e["leg"] for e in debug["errors"]] == ["openrouter:m1", "openrouter:m2"]
     assert all("RuntimeError: HTTP 429" in e["error"] for e in debug["errors"])
+
+
+def test_extract_kpis_async_split_draws_diagram_in_second_call(monkeypatch):
+    # Batch 40: the KPI reply carries no diagram; the diagram comes
+    # from a second, smaller call on the same model.
+    monkeypatch.setattr(kpi, "MODELS", ["m1", "m2"])
+    diagram_json = ('{"diagram": {"nodes": ['
+                    '{"id": "p", "label": "Players", "role": "payer"}, '
+                    '{"id": "c", "label": "Roblox", "role": "company"}, '
+                    '{"id": "cr", "label": "Creators", "role": "partner"}], '
+                    '"edges": [{"from": "p", "to": "c", "kind": "money", "label": "buys Robux"}, '
+                    '{"from": "c", "to": "cr", "kind": "money", "label": "revenue share"}, '
+                    '{"from": "cr", "to": "p", "kind": "value", "label": "experiences"}]}}')
+    kpi_json = ('{"kpis": [{"name": "Company-operated same shop sales", "value": "5.4%", '
+                '"unit": "%", "period": "Q3 2026", "kind": "metric"}]}')
+    seen = []
+
+    async def fake_llm(model, system, user):
+        # The diagram prompt names the extracted KPIs; the KPI prompt does not ask for a diagram.
+        if "Describe how the company makes money" in user:
+            seen.append(("diagram", model))
+            return {"text": diagram_json}
+        seen.append(("kpis", model))
+        return {"text": kpi_json}
+
+    items, diagram = asyncio.run(
+        kpi.extract_kpis_async("Company-operated same shop sales increased 5.4%.", llm_call=fake_llm))
+    assert [o["name"] for o in items] == ["Company-operated same shop sales"]
+    assert diagram is not None and len(diagram["nodes"]) == 3
+    assert seen == [("kpis", "m1"), ("diagram", "m1")]
+
+
+def test_extract_kpis_async_diagram_failure_keeps_kpis(monkeypatch):
+    # Batch 40: a failing diagram call never loses the KPIs.
+    monkeypatch.setattr(kpi, "MODELS", ["m1", "m2"])
+    kpi_json = ('{"kpis": [{"name": "Company-operated same shop sales", "value": "5.4%", '
+                '"unit": "%", "period": "Q3 2026", "kind": "metric"}]}')
+
+    async def fake_llm(model, system, user):
+        if "Describe how the company makes money" in user:
+            raise RuntimeError("diagram timed out")
+        return {"text": kpi_json}
+
+    debug = {}
+    items, diagram = asyncio.run(
+        kpi.extract_kpis_async("Company-operated same shop sales increased 5.4%.",
+                               llm_call=fake_llm, debug=debug))
+    assert [o["name"] for o in items] == ["Company-operated same shop sales"]
+    assert diagram is None
+    assert debug["diagram"] == "none"
+    assert [e["leg"] for e in debug["errors"]] == ["diagram:openrouter:m1", "diagram:openrouter:m2"]
+
+
+def test_extract_kpis_sync_split_draws_diagram(monkeypatch):
+    # Batch 40, sync twin: same two-phase split.
+    monkeypatch.setattr(kpi, "MODELS", ["m1"])
+    diagram_json = ('{"diagram": {"nodes": ['
+                    '{"id": "p", "label": "Players", "role": "payer"}, '
+                    '{"id": "c", "label": "Roblox", "role": "company"}], '
+                    '"edges": [{"from": "p", "to": "c", "kind": "money", "label": "buys"}]}}')
+    kpi_json = ('{"kpis": [{"name": "Company-operated same shop sales", "value": "5.4%", '
+                '"unit": "%", "period": "Q3 2026", "kind": "metric"}]}')
+    seen = []
+
+    def fake_llm(model, system, user):
+        if "Describe how the company makes money" in user:
+            seen.append(("diagram", model))
+            return {"text": diagram_json}
+        seen.append(("kpis", model))
+        return {"text": kpi_json}
+
+    items, diagram = kpi.extract_kpis_sync(
+        "Company-operated same shop sales increased 5.4%.", llm_call=fake_llm)
+    assert [o["name"] for o in items] == ["Company-operated same shop sales"]
+    assert diagram is not None and len(diagram["nodes"]) == 2
+    assert seen == [("kpis", "m1"), ("diagram", "m1")]
