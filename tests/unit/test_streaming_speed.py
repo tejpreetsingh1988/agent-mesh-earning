@@ -235,9 +235,22 @@ def test_orchestrator_stream_endpoint(monkeypatch):
                                     "latency_s": None}).model_dump(mode="json")
 
     async def _fake_agent(agent, payload):
+        # Batch 34: the Orchestrator calls the Writer three times
+        # in parallel, one mode per call — answer each mode with
+        # its own result shape.
+        if agent == "writer":
+            mode = payload.get("mode")
+            if mode == "story":
+                return {"story_result": {"story": "Orchestrated story.", "model": "test",
+                                         "tokens_in": None, "tokens_out": None,
+                                         "latency_s": None}}
+            if mode == "kpi":
+                return {"kpi_result": {"items": [], "diagram": None, "source_url": ""}}
+            if mode == "fineprint":
+                return {"fine_print_result": {"items": [], "source_urls": []}}
+            return briefing_d
         return {"scout": pack_d, "analyst": analysis_d,
-                "critic": {"verdict": "PASS", "issues": [], "rechecked_facts": []},
-                "writer": briefing_d}[agent]
+                "critic": {"verdict": "PASS", "issues": [], "rechecked_facts": []}}[agent]
 
     monkeypatch.setattr(proof, "_agent_call", _fake_agent)
     resp = TestClient(proof.app).get("/tasks/stream?ticker=GOOGL")

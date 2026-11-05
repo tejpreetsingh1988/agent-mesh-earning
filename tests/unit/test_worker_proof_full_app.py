@@ -144,8 +144,14 @@ def test_proof_writer_uses_async_story(monkeypatch):
     # run_writer_steps_async, whose names live in the vendored
     # mesh.writer_pipeline module globals. Lock the shape: no
     # sequential awaits may come back.
+    # Batch 34: the mode branches call the individual step
+    # functions (one Writer invocation per step, each with its
+    # own CPU budget) — lock those in too.
     proof_src = (_WRITER_SRC / "worker.py").read_text()
     assert "run_writer_steps_async" in proof_src
+    assert "run_story_step_async" in proof_src
+    assert "run_kpi_step_async" in proof_src
+    assert "run_fineprint_step_async" in proof_src
     assert "await build_story_async" not in proof_src
     assert "await kpis_for_pack_async" not in proof_src
     assert "await fineprint_for_pack_async" not in proof_src
@@ -160,6 +166,20 @@ def test_proof_writer_uses_async_story(monkeypatch):
     assert res["result"]["story"].startswith("Test story")
     assert res["result"]["story_model"] == "test-model"
     assert res["result"]["trace_id"] == "trace-test"
+    # Batch 34: a mode=kpi call returns only the KPI result
+    # (proves the transform mapped the mode branch, not the
+    # sync urllib call — a missed replace would fetch live).
+    async def _fake_kpis_items(ticker, quarter_end, ai=None, api_key=""):
+        return ([{"metric": "SSS", "value": "5%"}], {"nodes": []}, "https://sec.gov/991")
+
+    monkeypatch.setitem(_pipe_globals, "kpis_for_pack_async", _fake_kpis_items)
+    res = TestClient(_WRITER_PROOF.app).post("/tasks/send", json={
+        "mode": "kpi", "evidence_pack": _pack_dict(),
+        "analysis": _analysis_dict(), "trace_id": "trace-test"}).json()
+    assert res["state"] == "completed"
+    assert res["result"] == {"kpi_result": {
+        "items": [{"metric": "SSS", "value": "5%"}], "diagram": {"nodes": []},
+        "source_url": "https://sec.gov/991"}}
 
 
 def test_proof_orchestrator_chains_agents(monkeypatch):
@@ -171,9 +191,22 @@ def test_proof_orchestrator_chains_agents(monkeypatch):
                                     "latency_s": None}).model_dump(mode="json")
 
     async def _fake_agent(agent, payload):
+        # Batch 34: the Orchestrator calls the Writer three
+        # times in parallel, one mode per call — answer each
+        # mode with its own result shape.
+        if agent == "writer":
+            mode = payload.get("mode")
+            if mode == "story":
+                return {"story_result": {"story": "Orchestrated story.", "model": "test",
+                                         "tokens_in": None, "tokens_out": None,
+                                         "latency_s": None}}
+            if mode == "kpi":
+                return {"kpi_result": {"items": [], "diagram": None, "source_url": ""}}
+            if mode == "fineprint":
+                return {"fine_print_result": {"items": [], "source_urls": []}}
+            return briefing_d
         return {"scout": pack_d, "analyst": analysis_d,
-                "critic": {"verdict": "PASS", "issues": [], "rechecked_facts": []},
-                "writer": briefing_d}[agent]
+                "critic": {"verdict": "PASS", "issues": [], "rechecked_facts": []}}[agent]
 
     monkeypatch.setattr(_ORCH_PROOF, "_agent_call", _fake_agent)
     res = TestClient(_ORCH_PROOF.app).post("/tasks/send", json={"ticker": "GOOGL"}).json()

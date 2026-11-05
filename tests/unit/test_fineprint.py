@@ -157,6 +157,66 @@ def test_extract_sections_newline_free_filing():
     assert "market risk from changes in foreign currency" not in secs["mda"]
 
 
+# GOOGL-style: curly apostrophes (U+2019) in the headings, and a
+# notes heading with no "Item N." prefix — the real GOOGL Q3 2026
+# 10-Q (Nov 5, 2026) returned notes="" and an MD&A that ran to
+# the 60k cap, because every heading pattern uses straight quotes.
+CURLY_Q = (
+    "Table of Contents Alphabet Inc. 9 Notes to Consolidated Financial Statements "
+    "10 Item 2 Management\u2019s Discussion and Analysis of Financial Condition and "
+    "Results of Operations 22 Item 3 Quantitative and Qualitative Disclosures "
+    "Alphabet Inc. NOTES TO CONSOLIDATED FINANCIAL STATEMENTS (Unaudited) Note 1. "
+    "Summary of Significant Accounting Policies Basis of Presentation text here about "
+    "the company and its accounting policies for the quarter. The company recorded a "
+    "new impairment charge of fifty million dollars in the current quarter period. "
+    "Item 2. Management\u2019s Discussion and Analysis of Financial Condition and "
+    "Results of Operations Forward-Looking Statements This report contains forward "
+    "looking statements about demand for cloud computing products worldwide. Revenue "
+    "grew on strong cloud demand across enterprise customers this quarter. "
+    "Item 3. Quantitative and Qualitative Disclosures About Market Risk The company "
+    "is exposed to market risk from changes in foreign currency exchange rates."
+)
+
+
+def test_extract_sections_curly_apostrophe_headings():
+    secs = fp.extract_sections(CURLY_Q)
+    assert "Summary of Significant Accounting Policies" in secs["notes"]
+    assert "impairment charge of fifty million dollars" in secs["notes"]
+    assert "Table of Contents" not in secs["notes"]
+    assert "forward looking statements about demand" not in secs["notes"]
+    assert "forward looking statements about demand" in secs["mda"]
+    assert "Revenue grew on strong cloud demand" in secs["mda"]
+    assert "Table of Contents" not in secs["mda"]
+    assert "impairment charge of fifty million dollars" not in secs["mda"]
+    # The notes section ends at Item 2 (MD&A); MD&A ends at Item 3.
+    assert "market risk from changes in foreign currency" not in secs["mda"]
+    assert len(secs["mda"]) < 60000  # a real end, not the SECTION_CAP fallback
+
+
+def test_extract_sections_skips_filing_cross_refs():
+    """Regression (Nov 5, 2026): GOOGL's MD&A was truncated to
+    1,817 chars by "Item 8 in our Annual Report on Form 10-K"
+    1,817 chars in — a cross-reference to a HIGHER-numbered
+    item in another filing, which the old greater-number rule
+    treated as the next section heading."""
+    doc = (
+        "Table of Contents Item 1. Financial Statements 1 Item 2. Management's "
+        "Discussion and Analysis 5 Item 3. Quantitative Disclosures 9 "
+        "Item 1. Financial Statements Note 1 describes the basis of presentation "
+        "for the financial statements in this quarterly report period. "
+        "Item 2. Management's Discussion and Analysis of Financial Condition and "
+        "Results of Operations Forward-looking statements here. Revenue grew on "
+        "strong demand this quarter. For additional information see Item 8 in our "
+        "Annual Report on Form 10-K for the fiscal year ended December 31, 2025. "
+        "Costs rose as the company invested in new data center capacity worldwide. "
+        "Item 3. Quantitative and Qualitative Disclosures About Market Risk The "
+        "company is exposed to market risk from foreign currency exchange rates."
+    )
+    secs = fp.extract_sections(doc)
+    assert "Costs rose as the company invested" in secs["mda"]
+    assert "market risk from foreign currency" not in secs["mda"]
+
+
 def test_diff_paragraphs_fast_and_still_accurate():
     """Regression (Nov 5, 2026): the naive diff ran difflib
     against every previous sentence per current sentence —
