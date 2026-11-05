@@ -23,7 +23,7 @@ def test_steps_run_concurrently(monkeypatch):
         await asyncio.sleep(0.3)
         return {"story": "LLM STORY", "model": "llama"}
 
-    async def fake_kpis(ticker, quarter_end, ai=None, api_key=""):
+    async def fake_kpis(ticker, quarter_end, ai=None, api_key="", debug=None):
         await asyncio.sleep(0.3)
         return ([{"metric": "SSS", "value": "5%"}], {"nodes": []}, "https://sec.gov/991")
 
@@ -53,7 +53,7 @@ def test_slow_chain_hits_deadline(monkeypatch):
         await asyncio.sleep(0.5)
         return {"story": "TOO LATE", "model": "llama"}
 
-    async def fast_kpis(ticker, quarter_end, ai=None, api_key=""):
+    async def fast_kpis(ticker, quarter_end, ai=None, api_key="", debug=None):
         return ([{"metric": "SSS", "value": "5%"}], None, "")
 
     async def fast_fp(ticker, quarter_end, label, ai=None, api_key=""):
@@ -76,7 +76,7 @@ def test_raising_chain_falls_back(monkeypatch):
     async def ok_story(pack, analysis, api_key="", ai=None):
         return {"story": "LLM STORY", "model": "llama"}
 
-    async def boom_kpis(ticker, quarter_end, ai=None, api_key=""):
+    async def boom_kpis(ticker, quarter_end, ai=None, api_key="", debug=None):
         raise RuntimeError("EDGAR down")
 
     async def ok_fp(ticker, quarter_end, label, ai=None, api_key=""):
@@ -100,7 +100,7 @@ def test_individual_steps_return_result_dicts(monkeypatch):
     async def fake_story(pack, analysis, api_key="", ai=None):
         return {"story": "LLM STORY", "model": "llama"}
 
-    async def fake_kpis(ticker, quarter_end, ai=None, api_key=""):
+    async def fake_kpis(ticker, quarter_end, ai=None, api_key="", debug=None):
         return ([{"metric": "SSS", "value": "5%"}], {"nodes": []}, "https://sec.gov/991")
 
     async def fake_fp(ticker, quarter_end, label, ai=None, api_key=""):
@@ -113,7 +113,7 @@ def test_individual_steps_return_result_dicts(monkeypatch):
     assert asyncio.run(wp.run_story_step_async(pack, SimpleNamespace()))["story"] == "LLM STORY"
     kpi = asyncio.run(wp.run_kpi_step_async(pack))
     assert kpi == {"items": [{"metric": "SSS", "value": "5%"}], "diagram": {"nodes": []},
-                  "source_url": "https://sec.gov/991"}
+                  "source_url": "https://sec.gov/991", "debug": {"settled_on": "incomplete"}}
     fp = asyncio.run(wp.run_fineprint_step_async(pack))
     assert fp == {"items": [{"section": "MD&A", "quote": "q", "why_it_matters": "w"}],
                   "source_urls": ["https://sec.gov/10q"]}

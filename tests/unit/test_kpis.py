@@ -266,3 +266,46 @@ def test_extract_kpis_async_invalid_diagram_keeps_kpis():
         kpi.extract_kpis_async("SSS increased 5.4%.", llm_call=fake_llm))
     assert [o["name"] for o in items] == ["SSS"]
     assert diagram is None
+
+
+def test_extract_kpis_async_debug_records_empty_settle(monkeypatch):
+    # Batch 38: the debug dict records the two-model empty settle.
+    monkeypatch.setattr(kpi, "MODELS", ["m1", "m2"])
+    debug = {}
+
+    async def fake_llm(model, system, user):
+        return {"text": '{"kpis": []}'}
+
+    assert asyncio.run(kpi.extract_kpis_async("release text", llm_call=fake_llm, debug=debug)) == ([], None)
+    assert debug["replies"] == 2
+    assert debug["settled_on"] == "empty"
+    assert debug["last_parse_ok"] is True
+    assert debug["last_reply_head"] == '{"kpis": []}'
+
+
+def test_extract_kpis_async_debug_records_items(monkeypatch):
+    # Batch 38: a first-model valid reply settles on items.
+    monkeypatch.setattr(kpi, "MODELS", ["m1", "m2"])
+    debug = {}
+
+    async def fake_llm(model, system, user):
+        return {"text": '{"kpis": [{"name": "Company-operated same shop sales", "value": "5.4%", "unit": "%", "period": "Q3 2026", "kind": "metric"}], "diagram": null}'}
+
+    items, diagram = asyncio.run(kpi.extract_kpis_async("Company-operated same shop sales increased 5.4%.", llm_call=fake_llm, debug=debug))
+    assert len(items) == 1 and items[0]["name"] == "Company-operated same shop sales"
+    assert debug["replies"] == 1
+    assert debug["settled_on"] == "items"
+    assert debug["last_parse_ok"] is True
+
+
+def test_kpis_for_pack_async_debug_no_text(monkeypatch):
+    # Batch 38: a failed fetch is recorded, not silent.
+    async def fake_fetch(ticker, quarter_end_iso):
+        return None, ""
+
+    monkeypatch.setattr(kpi, "fetch_release_text_async", fake_fetch)
+    debug = {}
+    assert asyncio.run(kpi.kpis_for_pack_async("BROS", "2026-09-30", debug=debug)) == ([], None, "")
+    assert debug["fetched_chars"] == 0
+    assert debug["fetched_url"] == ""
+    assert debug["settled_on"] == "no_text"
