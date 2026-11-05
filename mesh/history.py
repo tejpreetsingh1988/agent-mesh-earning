@@ -38,6 +38,7 @@ TICKER_RE = re.compile(r"^[A-Z]{1,5}$")
 QUARTERLY_METRICS = {
     "total_revenue", "operating_income", "net_income", "ebitda",
     "operating_cash_flow", "free_cash_flow", "buybacks", "shares_outstanding",
+    "gaap_eps",
 }
 METRIC_LABELS = {
     "total_revenue": "Revenue", "operating_income": "Operating income",
@@ -45,6 +46,7 @@ METRIC_LABELS = {
     "operating_cash_flow": "Operating cash flow",
     "free_cash_flow": "Free cash flow", "buybacks": "Buybacks",
     "shares_outstanding": "Shares outstanding", "headcount": "Headcount",
+    "gaap_eps": "GAAP EPS",
 }
 
 NASDAQ_HEADERS = {
