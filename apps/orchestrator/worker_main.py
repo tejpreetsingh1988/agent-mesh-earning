@@ -144,6 +144,34 @@ async def _agent_call(agent: str, payload: dict) -> dict:
     return body["result"]
 
 
+async def _writer_steps(pack, analysis, trace_id):
+    """Batch 34: the Writer's three steps as three PARALLEL
+    invocations of the Writer Worker, one per mode, so each
+    gets its own 2,000ms CPU budget. A single Writer invocation
+    kept dying at exactly 2,010ms CPU on GOOGL (the three
+    chains' parse/diff/validate together exceed the Workers
+    Free budget in Pyodide). The story call raises on failure —
+    a briefing needs a story; the KPI and fine-print calls fall
+    back to their hiding results (the section hides). Returns
+    (story_result, kpi_result, fine_print_result) for
+    run_briefing_async to assemble into the Briefing."""
+    async def _step(mode, key, fallback=None):
+        try:
+            res = await _agent_call("writer", {"mode": mode, "evidence_pack": pack,
+                                               "analysis": analysis, "trace_id": trace_id})
+            return res[key]
+        except Exception:
+            if fallback is None:
+                raise
+            return fallback
+    story, kpi, fp = await asyncio.gather(
+        _step("story", "story_result"),
+        _step("kpi", "kpi_result", {"items": [], "diagram": None, "source_url": ""}),
+        _step("fineprint", "fine_print_result", {"items": [], "source_urls": []}),
+    )
+    return story, kpi, fp
+
+
 def _scout_payload(ticker: str, quarter: str = "") -> dict:
     """Scout agent payload. A requested quarter ("Q2 2026", or a
     fiscal label like "quarter ended 2026-07-26") rides
@@ -164,7 +192,7 @@ async def _handler(payload: dict) -> dict:
         scout_fn=lambda t: _agent_call("scout", _scout_payload(t, quarter)),
         analyst_fn=lambda pack: _agent_call("analyst", {"evidence_pack": pack}),
         critic_fn=lambda pack, analysis: _agent_call("critic", {"evidence_pack": pack, "analysis": analysis}),
-        writer_fn=lambda pack, analysis, trace_id: _agent_call("writer", {"evidence_pack": pack, "analysis": analysis, "trace_id": trace_id}),
+        writer_steps_fn=_writer_steps,
     )
     dumped = briefing.model_dump(mode="json")
     await _log_transcript(dumped)
@@ -283,11 +311,6 @@ async def tasks_stream(ticker: str = "", quarter: str = "", resume_run_id: str =
             await _save_checkpoint(run_id, ticker, quarter, "critic", critique=critique)
         return critique
 
-    async def _writer(pack, analysis, trace_id):
-        briefing = await _agent_call("writer", {"evidence_pack": pack, "analysis": analysis, "trace_id": trace_id})
-        await _save_checkpoint(run_id, ticker, quarter, "done", briefing=briefing)
-        return briefing
-
     async def _run():
         try:
             if resume_data is not None:
@@ -317,13 +340,18 @@ async def tasks_stream(ticker: str = "", quarter: str = "", resume_run_id: str =
                 scout_fn=_scout,
                 analyst_fn=_analyst,
                 critic_fn=_critic,
-                writer_fn=_writer,
+                writer_steps_fn=_writer_steps,
                 on_event=_on_event,
                 resume_from=resume_from,
             )
-            await queue.put({"event": "briefing",
-                             "briefing": briefing.model_dump(mode="json")})
-            await _log_transcript(briefing.model_dump(mode="json"))
+            dumped = briefing.model_dump(mode="json")
+            # Batch 34: the "done" checkpoint used to be saved
+            # inside the old _writer fn; the step-split Writer
+            # assembles the Briefing in run_briefing_async, so
+            # the checkpoint is saved here, on its return.
+            await _save_checkpoint(run_id, ticker, quarter, "done", briefing=dumped)
+            await queue.put({"event": "briefing", "briefing": dumped})
+            await _log_transcript(dumped)
         except Exception as e:
             await queue.put(error_event(e))
         finally:
