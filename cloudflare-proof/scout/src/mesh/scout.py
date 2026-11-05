@@ -170,7 +170,15 @@ def collect_evidence(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
     filing = None
     if requested_end:
         try:
-            recent_q = mcp_call("filings", "list_recent_filings", {"ticker": t, "limit": 50})
+            # Limit 300, not 50: the submissions "recent" array holds
+            # 1000 rows and the limit is a client-side slice, so 300
+            # costs no extra request — but 50 ages out the earnings
+            # 8-K for frequent filers. NVDA's May 20, 2026 earnings
+            # 8-K was outside the 50-window by November, so the
+            # April-quarter pick fell back to a June 30 non-earnings
+            # 8-K and consensus + price reaction anchored to the
+            # wrong date (Nov 4, 2026).
+            recent_q = mcp_call("filings", "list_recent_filings", {"ticker": t, "limit": 300})
         except Exception as e:
             return EvidencePack(
                 ticker=t, company_name=company_name, quarter_label=quarter, quarter_end=date.fromisoformat(requested_end),
@@ -232,7 +240,11 @@ def collect_evidence(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
     # for an 8-K it is the event date, not the quarter end.
     submissions_report_date = ""
     try:
-        recent = recent_q if recent_q is not None else mcp_call("filings", "list_recent_filings", {"ticker": t, "limit": 10})
+        # Limit 50, not 10: the picked earnings filing can be ~10
+        # weeks old on the latest path, and the 10 most recent
+        # filings span only ~3-4 weeks for frequent filers — the
+        # reportDate match below would then miss it.
+        recent = recent_q if recent_q is not None else mcp_call("filings", "list_recent_filings", {"ticker": t, "limit": 50})
         for f in (recent.get("filings") or []):
             if f.get("accessionNumber") == filing.get("accessionNumber") and f.get("reportDate"):
                 submissions_report_date = f["reportDate"]
