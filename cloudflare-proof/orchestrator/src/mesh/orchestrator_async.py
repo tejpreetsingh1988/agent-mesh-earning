@@ -68,9 +68,9 @@ async def run_briefing_async(ticker: str, scout_fn, analyst_fn, critic_fn, write
     34 ran them in parallel, but the parallel calls contended
     for the Workers AI free tier, for SEC, and for the 2,000ms
     CPU budget, so the KPI and fine-print legs came back empty
-    in full runs while working alone) and the Briefing is
-    assembled here with write_briefing. Takes precedence over
-    writer_fn.
+    in full runs while working alone — plus one KPI retry on
+    exhaustion (Batch 43)) and the Briefing is assembled here
+    with write_briefing. Takes precedence over writer_fn.
     on_event(event dict) -> optional callback, sync or async,
     called once per pipeline step with the step's outcome.
     resume_from (optional dict with "pack"/"analysis"/"critique")

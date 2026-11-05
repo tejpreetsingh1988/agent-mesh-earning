@@ -1114,8 +1114,11 @@ function showBriefingError(ticker, message, opts = {}) {
 
 // Returns true when the stream spoke (briefing rendered or an
 // error event shown) and false when it failed before any event,
-// which is the only case that falls back to POST.
-async function runStream(ticker, quarter = "", onBriefing = null, resumeRunId = "") {
+// which is the only case that falls back to POST. onError, when
+// given (Feature 17 same-quarter compare), receives the server
+// verdict instead of the standalone error UI, so the comparison
+// can show that side's error.
+async function runStream(ticker, quarter = "", onBriefing = null, resumeRunId = "", onError = null) {
   const q = quarter ? `&quarter=${encodeURIComponent(quarter)}` : "";
   const r = resumeRunId ? `&resume_run_id=${encodeURIComponent(resumeRunId)}` : "";
   const resp = await fetch(`${ORCHESTRATOR_URL}/tasks/stream?ticker=${encodeURIComponent(ticker)}${q}${r}`);
@@ -1162,7 +1165,14 @@ async function runStream(ticker, quarter = "", onBriefing = null, resumeRunId = 
             // no resume id, so this cannot loop.
             if (ev.code === "unknown_run" && resumeRunId) {
               lastRunId = "";
-              return runStream(ticker, quarter, onBriefing);
+              return runStream(ticker, quarter, onBriefing, "", onError);
+            }
+            if (onError) {
+              const msg = ev.verdict === "FAIL"
+                ? `Critic check failed — no briefing was published for this quarter${ev.issues && ev.issues.length ? ` (${ev.issues.length} issue${ev.issues.length === 1 ? "" : "s"})` : ""}.`
+                : (ev.error || "Stream failed");
+              onError(msg);
+              return true;
             }
             if (ev.verdict === "FAIL") {
               showCriticFail(ticker, ev.issues || []);
@@ -1186,6 +1196,7 @@ async function runStream(ticker, quarter = "", onBriefing = null, resumeRunId = 
     // do not offer a resume, which would only reproduce it.
     if (e && e.isDisplayError) {
       stopElapsed();
+      if (onError) { onError(e.message); return true; }
       showBriefingError(ticker, e.message, { retry: false });
       return true;
     }
@@ -1330,7 +1341,7 @@ function setQuarterButtonsDisabled(disabled) {
   document.querySelectorAll("#quarter-picker button").forEach((b) => { b.disabled = disabled; });
 }
 
-async function getBriefing(ticker, quarter = "", onDone = null, resumeRunId = "") {
+async function getBriefing(ticker, quarter = "", onDone = null, resumeRunId = "", onError = null) {
   ticker = String(ticker || "").trim().toUpperCase();
   quarter = String(quarter || "").trim();
   if (!/^Q[1-4] \d{4}$/.test(quarter) && !/^quarter ended \d{4}-\d{2}-\d{2}$/.test(quarter)) quarter = "";
@@ -1357,7 +1368,7 @@ async function getBriefing(ticker, quarter = "", onDone = null, resumeRunId = ""
   const cached = readBriefingCache(ticker, quarter);
   if (cached) {
     lastScoutFacts = cached.facts || [];
-    try { render(cached.briefing); } catch (e) { showBriefingError(ticker, "Could not display the saved briefing: " + (e && e.message ? e.message : String(e))); return; }
+    try { render(cached.briefing); } catch (e) { const msg = "Could not display the saved briefing: " + (e && e.message ? e.message : String(e)); if (onError) { onError(msg); return; } showBriefingError(ticker, msg); return; }
     show($("agents"), false);
     show($("log"), false);
     show($("error"), false);
@@ -1393,7 +1404,7 @@ async function getBriefing(ticker, quarter = "", onDone = null, resumeRunId = ""
   try {
     let streamed;
     try {
-      streamed = await runStream(ticker, quarter, onDone, resumeRunId);
+      streamed = await runStream(ticker, quarter, onDone, resumeRunId, onError);
     } catch (e) {
       streamed = false;
     }
@@ -1408,7 +1419,8 @@ async function getBriefing(ticker, quarter = "", onDone = null, resumeRunId = ""
         stopElapsed();
       } catch (e) {
         stopElapsed();
-        showBriefingError(ticker, e.message);
+        if (onError) onError(e.message);
+        else showBriefingError(ticker, e.message);
       }
     }
   } finally {
@@ -1454,15 +1466,21 @@ let lastBriefing = null;
 // never triggers a compare against a stale briefing.
 let pendingAutoCompare = null;
 let lastComparisonLink = "";
+// Feature 18: a shared 3-way link's third company, run once the
+// 2-way comparison is on screen (see startCompare's onDone).
+let pendingThirdCompare = null;
 
 // Consume a pending auto-compare after the base run finishes.
 // finishedTicker is the ticker whose run just ended (cache or
 // stream); the guard ties it to the base the link named.
 function consumePendingAutoCompare(finishedTicker) {
   if (!pendingAutoCompare) return;
-  const { second, base } = pendingAutoCompare;
+  const { second, base, compareQuarter } = pendingAutoCompare;
   pendingAutoCompare = null;
-  if (lastBriefing && lastBriefing.ticker === base && finishedTicker === base) startCompare(second);
+  if (lastBriefing && lastBriefing.ticker === base && finishedTicker === base) {
+    if (compareQuarter) startSameQuarterCompare(compareQuarter);
+    else startCompare(second);
+  }
 }
 
 // Markdown export of the finished briefing: the same record the
@@ -1600,6 +1618,7 @@ function prevFiscalQuarters(label, facts, count) {
 function renderQuarterPicker(label) {
   const wrap = $("quarter-picker");
   const btns = $("quarter-buttons");
+  renderFiscalNote();
   if (!wrap || !btns) return;
   let prev = prevQuarters(label, 3);
   let fiscal = false;
@@ -1618,6 +1637,29 @@ function renderQuarterPicker(label) {
     btn.addEventListener("click", () => getBriefing(currentTicker, btn.dataset.q));
   });
   show(wrap, true);
+}
+
+// Feature 22: fiscal calendar note — which months this company's
+// quarters end in, from the briefing's own Scout facts only (no
+// new fetch). Months come from the last 8 distinct fact periods;
+// fewer than 4 periods hides the note (too little evidence for a
+// pattern). Irregular periods render as observed — the note never
+// states a future quarter-end date and never "corrects" a 52/53
+// week calendar.
+const FISCAL_MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function fiscalNoteMonths(facts) {
+  const periods = [...new Set((facts || []).map((f) => f.period).filter((p) => /^\d{4}-\d{2}-\d{2}$/.test(p || "")))].sort().reverse().slice(0, 8);
+  if (periods.length < 4) return null;
+  const months = [...new Set(periods.map((p) => Number(p.slice(5, 7))))].sort((a, b) => a - b);
+  return months.map((m) => FISCAL_MONTH_NAMES[m - 1]);
+}
+function renderFiscalNote() {
+  const note = $("fiscal-note");
+  if (!note) return;
+  const months = fiscalNoteMonths(lastScoutFacts);
+  if (!months) { note.hidden = true; return; }
+  setText(note, `Quarter ends in the latest facts fall in: ${months.join(", ")}.`);
+  note.hidden = false;
 }
 
 // Peer comparison (Batch 8): pure helpers over briefing claim
@@ -1640,13 +1682,14 @@ function claimValueMap(claims) {
   return map;
 }
 
-function alignClaims(baseClaims, secondClaims) {
-  const b = claimValueMap(baseClaims);
-  const s = claimValueMap(secondClaims);
-  return [...new Set([...b.keys(), ...s.keys()])].map((metric) => ({
+// Feature 18: the aligner is N-way — rows carry a values array,
+// one per briefing, so the same code renders 2-way and 3-way
+// comparisons. A metric missing from a briefing shows "—".
+function alignClaims(...claimLists) {
+  const maps = claimLists.map((c) => claimValueMap(c));
+  return [...new Set(maps.flatMap((m) => [...m.keys()]))].map((metric) => ({
     metric,
-    base: b.has(metric) ? b.get(metric) : "—",
-    second: s.has(metric) ? s.get(metric) : "—",
+    values: maps.map((m) => (m.has(metric) ? m.get(metric) : "—")),
   }));
 }
 
@@ -1658,44 +1701,171 @@ function headlineValue(claims, test) {
   return "—";
 }
 
-function compareTableHtml(baseTicker, secondTicker, rows) {
-  const head = `<tr><th>Metric</th><th class="num">${esc(baseTicker)}</th><th class="num">${esc(secondTicker)}</th></tr>`;
+function compareTableHtml(tickers, rows) {
+  const head = `<tr><th>Metric</th>${tickers.map((t) => `<th class="num">${esc(t)}</th>`).join("")}</tr>`;
   const body = rows.map((r) =>
-    `<tr><td>${esc(r.metric)}</td><td class="num">${esc(r.base)}</td><td class="num">${esc(r.second)}</td></tr>`).join("");
+    `<tr><td>${esc(r.metric)}</td>${r.values.map((v) => `<td class="num">${esc(v)}</td>`).join("")}</tr>`).join("");
   return `<table class="compare-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
 }
 
-function renderComparison(base, second) {
+// The current comparison, for the third-company flow and the
+// Remove button: the briefings on screen (2 or 3) plus whether
+// the pair is a same-ticker compare.
+let lastComparison = null;
+
+function renderComparison(base, second, opts = {}) {
+  renderComparisonN([base, second], opts);
+}
+
+// Feature 18: the N-way renderer — 2-way and 3-way share it.
+// The 3-way title is the three tickers, nothing more (no overall
+// verdict, no ranking, no "best" column). The quarters line names
+// every quarter and warns when they differ.
+function renderComparisonN(briefings, opts = {}) {
   const sec = $("comparison");
-  if (!sec || !base || !second) return;
-  // Feature 7: the tab names the pair it shows.
-  document.title = `${base.ticker} vs ${second.ticker} | Earnings Ledger`;
-  const sameQuarter = base.quarter_label === second.quarter_label;
-  $("comparison-title").textContent = `Head to head: ${base.ticker} vs ${second.ticker}`;
-  $("comparison-quarters").textContent = sameQuarter
-    ? `Both briefings are for ${base.quarter_label}. Figures are each briefing's verified claims.`
-    : `Warning: quarters differ (${base.quarter_label} vs ${second.quarter_label}) — figures are not like-for-like.`;
-  $("comparison-verdicts").innerHTML =
-    `<div class="compare-verdict"><div class="compare-verdict-head">${logoImg(base.ticker, "logo-img logo-verdict")}<span class="badge badge-primary">${esc(base.ticker)}</span></div><p class="body-text">${esc(base.verdict)}</p></div>`
-    + `<div class="compare-verdict"><div class="compare-verdict-head">${logoImg(second.ticker, "logo-img logo-verdict")}<span class="badge badge-primary">${esc(second.ticker)}</span></div><p class="body-text">${esc(second.verdict)}</p></div>`;
+  if (!sec || !briefings || briefings.length < 2) return;
+  const tickers = briefings.map((b) => b.ticker);
+  lastComparison = { briefings, sameTicker: !!opts.sameTicker };
+  // Feature 7: the tab names the pair (or trio) it shows.
+  const title = opts.sameTicker
+    ? `${briefings[0].ticker}: ${shortQuarterLabel(briefings[0].quarter_label)} vs ${shortQuarterLabel(briefings[1].quarter_label)}`
+    : (briefings.length === 3 ? tickers.join(" vs ") : `Head to head: ${tickers[0]} vs ${tickers[1]}`);
+  document.title = `${title} | Earnings Ledger`;
+  const quarters = briefings.map((b) => b.quarter_label);
+  const allSameQuarter = quarters.every((q) => q === quarters[0]);
+  $("comparison-title").textContent = title;
+  $("comparison-quarters").textContent = allSameQuarter
+    ? (briefings.length === 3
+      ? `All three briefings are for ${quarters[0]}. Figures are each briefing's verified claims.`
+      : `Both briefings are for ${quarters[0]}. Figures are each briefing's verified claims.`)
+    : `Warning: quarters differ (${quarters.join(" vs ")}) — figures are not like-for-like.`;
+  $("comparison-verdicts").innerHTML = briefings.map((b, i) =>
+    `<div class="compare-verdict"><div class="compare-verdict-head">${logoImg(b.ticker, "logo-img logo-verdict")}<span class="badge badge-primary">${esc(b.ticker)}</span>`
+    + (briefings.length === 3 && i === 2
+      ? `<button type="button" class="btn-secondary" id="comparison-remove-third">Remove</button>` : "")
+    + `</div><p class="body-text">${esc(b.verdict)}</p></div>`).join("");
+  const removeBtn = $("comparison-remove-third");
+  if (removeBtn) removeBtn.addEventListener("click", () => removeThirdComparison());
   const headlineRows = [
     { metric: "Revenue YoY growth",
-      base: headlineValue(base.table, (m) => m === "Revenue YoY growth"),
-      second: headlineValue(second.table, (m) => m === "Revenue YoY growth") },
+      values: briefings.map((b) => headlineValue(b.table, (m) => m === "Revenue YoY growth")) },
     { metric: "Operating margin",
-      base: headlineValue(base.table, (m) => m === "Operating margin"),
-      second: headlineValue(second.table, (m) => m === "Operating margin") },
+      values: briefings.map((b) => headlineValue(b.table, (m) => m === "Operating margin")) },
     { metric: "EPS vs consensus",
-      base: headlineValue(base.table, (m) => m.includes("vs consensus")),
-      second: headlineValue(second.table, (m) => m.includes("vs consensus")) },
+      values: briefings.map((b) => headlineValue(b.table, (m) => m.includes("vs consensus"))) },
   ];
-  $("comparison-headline").innerHTML = compareTableHtml(base.ticker, second.ticker, headlineRows);
+  $("comparison-headline").innerHTML = compareTableHtml(tickers, headlineRows);
   $("comparison-table").innerHTML = compareTableHtml(
-    base.ticker, second.ticker, alignClaims(base.table, second.table));
+    tickers, alignClaims(...briefings.map((b) => b.table)));
   const ub = $("comparison-units");
   if (ub) { ub.innerHTML = ""; show(ub, false); }
   show(sec, true);
-  renderUnitEconomics(base.ticker, second.ticker);
+  show($("compare-third-box"), briefings.length === 2 && !opts.sameTicker);
+  renderUnitEconomics(tickers);
+  // The growth race compares companies' revenue paths — it has
+  // nothing to draw when both sides are the same company.
+  if (opts.sameTicker) {
+    show($("growth-race-card"), false);
+    destroyChart("growth-race");
+  } else {
+    renderGrowthRace(tickers);
+  }
+}
+
+// Feature 18: dropping the third company returns to the 2-way
+// view and updates the share link.
+function removeThirdComparison() {
+  const cur = lastComparison;
+  if (!cur || cur.briefings.length !== 3) return;
+  const [base, second] = cur.briefings;
+  const baseQuarter = currentQuarter;
+  renderComparisonN([base, second], { sameTicker: cur.sameTicker });
+  lastComparisonLink = `${location.origin}${location.pathname}?ticker=${base.ticker}&compare=${second.ticker}`
+    + (baseQuarter ? `&quarter=${encodeURIComponent(baseQuarter)}` : "");
+  try {
+    const url = new URL(location.href);
+    url.searchParams.set("ticker", base.ticker);
+    url.searchParams.set("compare", second.ticker);
+    url.searchParams.delete("compare2");
+    if (baseQuarter) url.searchParams.set("quarter", baseQuarter);
+    else url.searchParams.delete("quarter");
+    history.replaceState(null, "", url);
+  } catch { /* URL sharing is best-effort */ }
+}
+
+// Feature 19: growth race chart — revenue trajectories rebased
+// to a common start. Common window = the intersection of the
+// companies' quarter periods (positive values only); each series
+// is indexed to 100 at the first common quarter (the Worker's
+// rebase gives % change from first, so indexed = value_pct +
+// 100 — same math, no new rebasing). Total growth and CAGR reuse
+// the history module's formulas over the common window. Fewer
+// than 4 common quarters hides the chart. Series are never
+// shifted, stretched, or forward-filled.
+function growthRaceData(seriesByTicker) {
+  const tickers = Object.keys(seriesByTicker || {});
+  if (tickers.length < 2) return null;
+  const byEnd = {};
+  for (const t of tickers) {
+    const m = new Map();
+    for (const p of (seriesByTicker[t] || [])) {
+      if (p && p.period_end && typeof p.value === "number" && Number.isFinite(p.value) && p.value > 0) m.set(p.period_end, p.value);
+    }
+    byEnd[t] = m;
+  }
+  const common = [...byEnd[tickers[0]].keys()].filter((e) => tickers.every((t) => byEnd[t].has(e))).sort();
+  if (common.length < 4) return null;
+  const first = common[0], last = common[common.length - 1];
+  const days = (new Date(last) - new Date(first)) / 86400000;
+  const lines = tickers.map((t) => {
+    const firstV = byEnd[t].get(first), lastV = byEnd[t].get(last);
+    const data = common.map((e) => byEnd[t].get(e) / firstV * 100);
+    const totalGrowth = (lastV / firstV - 1) * 100;
+    const cagr = days > 0 ? (Math.pow(lastV / firstV, 365.25 / days) - 1) * 100 : null;
+    return { ticker: t, data, totalGrowth, cagr };
+  });
+  return { labels: common.map((e) => quarterLabel(e)), lines };
+}
+
+let lastGrowthRacePair = null;
+async function renderGrowthRace(tickers) {
+  const card = $("growth-race-card");
+  if (!card || !tickers || tickers.length < 2) return;
+  const pair = tickers.join("|");
+  lastGrowthRacePair = pair;
+  show(card, false);
+  destroyChart("growth-race");
+  const fetchHist = async (t) => {
+    try {
+      const r = await fetch(`${ORCHESTRATOR_URL}/history?ticker=${encodeURIComponent(t)}&metric=total_revenue`);
+      return r.ok ? r.json() : null;
+    } catch { return null; }
+  };
+  const payloads = await Promise.all(tickers.map(fetchHist));
+  if (lastGrowthRacePair !== pair) return; // superseded
+  if (payloads.some((p) => !p)) return;
+  const seriesByTicker = {};
+  tickers.forEach((t, i) => { seriesByTicker[t] = payloads[i].series || []; });
+  const built = growthRaceData(seriesByTicker);
+  const empty = $("chart-growth-race-empty");
+  if (!built) {
+    if (empty) empty.hidden = false;
+    show(card, true);
+    return;
+  }
+  if (empty) empty.hidden = true;
+  const colors = ["#1d4ed8", "#0f766e", "#b45309"];
+  const darkColors = ["#60a5fa", "#2dd4bf", "#f59e0b"];
+  const datasets = built.lines.map((line, i) => {
+    const growth = line.totalGrowth != null
+      ? `${line.totalGrowth >= 0 ? "+" : ""}${line.totalGrowth.toFixed(1)}%` : "—";
+    const cagr = line.cagr != null ? `CAGR ${line.cagr.toFixed(1)}%` : "CAGR —";
+    return { label: `${line.ticker} (${growth}, ${cagr})`, data: line.data,
+      borderColor: themeColor(colors[i % colors.length], darkColors[i % darkColors.length]),
+      backgroundColor: "transparent", tension: 0.2, pointRadius: 0 };
+  });
+  makeChart("growth-race", "line", built.labels, datasets);
+  show(card, true);
 }
 
 function startCompare(secondTicker) {
@@ -1704,11 +1874,10 @@ function startCompare(secondTicker) {
   const second = String(secondTicker || "").trim().toUpperCase();
   const note = $("compare-note");
   if (!second) return;
+  // Feature 17: picking the base ticker itself switches the box
+  // to same-company mode — quarter buttons instead of a refusal.
   if (second === base.ticker) {
-    if (note) {
-      note.textContent = "That's the company already shown — pick a different one.";
-      show(note, true);
-    }
+    renderSameTickerQuarters();
     return;
   }
   if (note) show(note, false);
@@ -1731,11 +1900,112 @@ function startCompare(secondTicker) {
       const url = new URL(location.href);
       url.searchParams.set("ticker", base.ticker);
       url.searchParams.set("compare", second);
+      url.searchParams.delete("compareQuarter");
+      url.searchParams.delete("compare2");
       if (baseQuarter) url.searchParams.set("quarter", baseQuarter);
       else url.searchParams.delete("quarter");
       history.replaceState(null, "", url);
     } catch { /* URL sharing is best-effort */ }
+    // Feature 18: a shared 3-way link chains the third company
+    // once the 2-way comparison is on screen.
+    if (pendingThirdCompare) {
+      const third = pendingThirdCompare;
+      pendingThirdCompare = null;
+      startCompare3(third);
+    }
   });
+}
+
+// Feature 17: same-company quarter compare. The compare box
+// switches mode when the search picks the base ticker: it shows
+// the base company's quarter buttons (the same prevQuarters /
+// prevFiscalQuarters functions as the quarter picker, driven by
+// the base briefing's facts) with the prompt "Compare with an
+// earlier quarter". Picking a quarter runs that quarter's
+// briefing through the existing cache + pipeline path.
+function renderSameTickerQuarters() {
+  const base = lastBriefing;
+  const box = $("compare-results");
+  const note = $("compare-note");
+  if (!base || !box) return;
+  const search = $("compare-search");
+  if (search) search.value = "";
+  if (note) { note.textContent = `Compare ${base.ticker} with an earlier quarter`; show(note, true); }
+  let prev = prevQuarters(base.quarter_label, 3);
+  let fiscal = false;
+  if (!prev.length) {
+    prev = prevFiscalQuarters(base.quarter_label, lastScoutFacts, 3);
+    fiscal = prev.length > 0;
+  }
+  if (!prev.length) {
+    box.innerHTML = `<p class="search-empty">No earlier quarters in this briefing's facts to compare with.</p>`;
+    show(box, true);
+    return;
+  }
+  box.innerHTML = prev.map((l) =>
+    `<button type="button" class="btn-secondary quarter-btn" data-q="${esc(l)}">${esc(fiscal ? shortQuarterLabel(l) : l)}</button>`).join("");
+  box.querySelectorAll(".quarter-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      show(box, false);
+      startSameQuarterCompare(btn.dataset.q);
+    });
+  });
+  show(box, true);
+}
+
+function startSameQuarterCompare(label) {
+  const base = lastBriefing;
+  const note = $("compare-note");
+  if (!base || !label) return;
+  // Comparing a quarter with itself is refused inline, like
+  // self-compare today.
+  if (label === base.quarter_label) {
+    if (note) {
+      note.textContent = "That's the quarter already shown — pick an earlier one.";
+      show(note, true);
+    }
+    return;
+  }
+  if (note) show(note, false);
+  const baseQuarter = currentQuarter;
+  getBriefing(base.ticker, label, (b) => {
+    renderComparison(base, b, { sameTicker: true });
+    lastComparisonLink = `${location.origin}${location.pathname}?ticker=${base.ticker}&compare=${base.ticker}&compareQuarter=${encodeURIComponent(label)}`
+      + (baseQuarter ? `&quarter=${encodeURIComponent(baseQuarter)}` : "");
+    try {
+      const url = new URL(location.href);
+      url.searchParams.set("ticker", base.ticker);
+      url.searchParams.set("compare", base.ticker);
+      url.searchParams.set("compareQuarter", label);
+      if (baseQuarter) url.searchParams.set("quarter", baseQuarter);
+      else url.searchParams.delete("quarter");
+      history.replaceState(null, "", url);
+    } catch { /* URL sharing is best-effort */ }
+  }, "", (msg) => {
+    renderComparisonError(base, label, msg);
+  });
+}
+
+// Feature 17 error side: the earlier quarter's briefing failed
+// or was NOT_REPORTED_YET. The comparison still renders with
+// the base side's figures and the failure named on the second
+// side — it never falls back to the latest quarter.
+function renderComparisonError(base, quarterLabel, message) {
+  const sec = $("comparison");
+  if (!sec || !base) return;
+  document.title = `${base.ticker}: ${shortQuarterLabel(base.quarter_label)} vs ${shortQuarterLabel(quarterLabel)} | Earnings Ledger`;
+  $("comparison-title").textContent = `${base.ticker}: ${shortQuarterLabel(base.quarter_label)} vs ${shortQuarterLabel(quarterLabel)}`;
+  $("comparison-quarters").textContent = `Warning: quarters differ (${base.quarter_label} vs ${quarterLabel}) — the earlier quarter's briefing failed, so only the base side has figures. No latest-quarter briefing was substituted.`;
+  $("comparison-verdicts").innerHTML =
+    `<div class="compare-verdict"><div class="compare-verdict-head">${logoImg(base.ticker, "logo-img logo-verdict")}<span class="badge badge-primary">${esc(base.ticker)}</span></div><p class="body-text">${esc(base.verdict)}</p></div>`
+    + `<div class="compare-verdict"><div class="compare-verdict-head"><span class="badge badge-primary">${esc(base.ticker)}</span></div><p class="body-text">${esc(message || "The earlier quarter's briefing could not be built.")}</p></div>`;
+  $("comparison-headline").innerHTML = "";
+  $("comparison-table").innerHTML = "";
+  const ub = $("comparison-units");
+  if (ub) { ub.innerHTML = ""; show(ub, false); }
+  show($("growth-race-card"), false);
+  destroyChart("growth-race");
+  show(sec, true);
 }
 
 function renderCompareResults(matches) {
@@ -1751,6 +2021,72 @@ function renderCompareResults(matches) {
         show(box, false);
         $("compare-search").value = "";
         startCompare(btn.dataset.ticker);
+      });
+    });
+  }
+  show(box, true);
+}
+
+// Feature 18: the third company. Runs sequentially after the
+// 2-way comparison (base, then second, then third — no parallel
+// pipeline runs). A failed third briefing falls back to the
+// completed 2-way comparison with a note naming the failed
+// ticker; it never shows a partial third column.
+function startCompare3(thirdTicker) {
+  const cur = lastComparison;
+  const note = $("compare-note");
+  if (!cur || cur.briefings.length !== 2) return;
+  const [base, second] = cur.briefings;
+  const third = String(thirdTicker || "").trim().toUpperCase();
+  if (!third) return;
+  if (third === base.ticker || third === second.ticker) {
+    if (note) {
+      note.textContent = "That's a company already in this comparison — pick a different one.";
+      show(note, true);
+    }
+    return;
+  }
+  if (note) show(note, false);
+  const box3 = $("compare-results-3");
+  if (box3) show(box3, false);
+  const baseQuarter = currentQuarter;
+  getBriefing(third, "", (b) => {
+    renderComparisonN([base, second, b]);
+    lastComparisonLink = `${location.origin}${location.pathname}?ticker=${base.ticker}&compare=${second.ticker}&compare2=${third}`
+      + (baseQuarter ? `&quarter=${encodeURIComponent(baseQuarter)}` : "");
+    try {
+      const url = new URL(location.href);
+      url.searchParams.set("ticker", base.ticker);
+      url.searchParams.set("compare", second.ticker);
+      url.searchParams.set("compare2", third);
+      if (baseQuarter) url.searchParams.set("quarter", baseQuarter);
+      else url.searchParams.delete("quarter");
+      history.replaceState(null, "", url);
+    } catch { /* URL sharing is best-effort */ }
+  }, "", () => {
+    renderComparisonN([base, second]);
+    if (note) {
+      note.textContent = `${third} could not be compared — showing the two-company comparison.`;
+      show(note, true);
+    }
+  });
+}
+
+function renderCompareResults3(matches) {
+  const box = $("compare-results-3");
+  if (!box) return;
+  if (!matches.length) {
+    box.innerHTML = `<p class="search-empty">No company matched — try a different spelling, or a ticker like NVDA.</p>`;
+  } else {
+    box.innerHTML = matches.map((m) =>
+      `<button type="button" class="chip search-match" data-ticker="${esc(m.ticker)}">`
+      + `${logoImg(m.ticker, "logo-img logo-chip")}${esc(m.name)} (${esc(m.ticker)})</button>`).join("");
+    box.querySelectorAll(".search-match").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        show(box, false);
+        const search3 = $("compare-search-3");
+        if (search3) search3.value = "";
+        startCompare3(btn.dataset.ticker);
       });
     });
   }
@@ -2270,7 +2606,137 @@ async function renderTrendTable(ticker) {
   show(sec, true);
 }
 
-async function renderUnitEconomics(baseTicker, secondTicker) {
+// Feature 14: dividend card — last 4 Cash dividends + trailing
+// yield, from the Orchestrator's /dividends route. Hides when the
+// company pays none, when the fetch fails, or when the ticker
+// changes mid-flight. The yield line hides when the close is
+// missing; the next declared ex-date never enters the sum.
+async function renderDividends(ticker) {
+  const sec = $("chart-dividend-card");
+  if (!sec || !ticker || !lastBriefing || lastBriefing.ticker !== ticker) return;
+  show(sec, false);
+  try {
+    const resp = await fetch(`${ORCHESTRATOR_URL}/dividends?ticker=${encodeURIComponent(ticker)}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!data || data.error || !lastBriefing || lastBriefing.ticker !== ticker) return; // stale
+    const rows = data.rows || [];
+    if (!rows.length) return;
+    const fmtAmt = (v) => (Number.isFinite(Number(v)) ? `$${Number(v).toFixed(2)}` : "—");
+    setHTML($("b-dividends"),
+      `<thead><tr><th>Ex-date</th><th>Amount</th><th>Pay date</th></tr></thead><tbody>` +
+      rows.map((r) =>
+        `<tr><td>${esc(r.ex_date || "—")}</td><td>${fmtAmt(r.amount)}</td><td>${esc(r.pay_date || "—")}</td></tr>`).join("") +
+      `</tbody>`);
+    const y = $("b-dividend-yield");
+    if (data.trailing_yield != null && Number.isFinite(Number(data.trailing_yield))) {
+      const close = Number.isFinite(Number(data.last_close)) ? ` ÷ last close ${fmtAmt(data.last_close)}` : "";
+      setText(y, `Trailing yield: ${Number(data.trailing_yield).toFixed(1)}% (sum of last 4 dividends${close})`);
+      y.hidden = false;
+    } else { y.hidden = true; }
+    const n = $("b-dividend-next");
+    if (data.next_ex_date) {
+      setText(n, `Next ex-date (declared): ${esc(data.next_ex_date.ex_date || "—")} — ${fmtAmt(data.next_ex_date.amount)}`);
+      n.hidden = false;
+    } else { n.hidden = true; }
+    show(sec, true);
+  } catch { /* hide on failure */ }
+}
+
+// Feature 16: cash-return chart data — buybacks + dividends per
+// quarter. Quarters are the buyback series' quarters (up to 12,
+// newest last); a dividend belongs to the quarter whose window
+// (previous buyback period_end, this period_end] its ex-date
+// falls in. The dividends segment uses the nearest shares-series
+// period <= the quarter end; with no such period the segment is
+// omitted and the quarter is flagged. A quarter with neither
+// segment is omitted from the chart (never drawn as zero). Fewer
+// than 2 quarters with any data hides the card.
+function cashReturnQuarters(buybacksSeries, sharesSeries, dividendRows) {
+  const bb = (buybacksSeries || []).filter((p) => p && Number.isFinite(Number(p.value)) && /^\d{4}-\d{2}-\d{2}$/.test(p.period_end || ""))
+    .sort((a, b) => String(a.period_end).localeCompare(String(b.period_end)));
+  if (!bb.length) return null;
+  const shares = (sharesSeries || []).filter((p) => p && Number.isFinite(Number(p.value)) && /^\d{4}-\d{2}-\d{2}$/.test(p.period_end || ""))
+    .sort((a, b) => String(a.period_end).localeCompare(String(b.period_end)));
+  const divs = (dividendRows || []).filter((r) => r && Number.isFinite(Number(r.amount)) && /^\d{4}-\d{2}-\d{2}$/.test(r.ex_date || ""))
+    .sort((a, b) => String(a.ex_date).localeCompare(String(b.ex_date)));
+  const built = bb.map((q, i) => {
+    const end = q.period_end;
+    const prev = i > 0 ? bb[i - 1].period_end : null;
+    const start = prev || new Date(new Date(end + "T00:00:00Z").getTime() - 100 * 86400000).toISOString().slice(0, 10);
+    const perShare = divs.filter((d) => d.ex_date > start && d.ex_date <= end)
+      .reduce((s, d) => s + Number(d.amount), 0);
+    let sharesForQ = null;
+    for (const s of shares) { if (s.period_end <= end) sharesForQ = Number(s.value); else break; }
+    const dividendsUsd = perShare > 0 && sharesForQ != null ? perShare * sharesForQ : null;
+    const dividendsOmitted = perShare > 0 && sharesForQ == null;
+    return { period_end: end, buybacks_usd: Number(q.value), dividends_usd: dividendsUsd, dividends_omitted: dividendsOmitted };
+  });
+  const window = built.slice(-12);
+  let omitted = 0;
+  const quarters = window.filter((q) => {
+    if (!q.buybacks_usd && q.dividends_usd == null) { omitted++; return false; }
+    return true;
+  });
+  if (quarters.length < 2) return null;
+  return { quarters, omitted };
+}
+
+async function renderCashReturn(ticker) {
+  const sec = $("chart-cashreturn-card");
+  if (!sec || !ticker || !lastBriefing || lastBriefing.ticker !== ticker) return;
+  show(sec, false);
+  destroyChart("cashreturn");
+  const fetchHist = async (m) => {
+    try {
+      const r = await fetch(`${ORCHESTRATOR_URL}/history?ticker=${encodeURIComponent(ticker)}&metric=${encodeURIComponent(m)}`);
+      return r.ok ? r.json() : null;
+    } catch { return null; }
+  };
+  const fetchDivs = async () => {
+    try {
+      const r = await fetch(`${ORCHESTRATOR_URL}/dividends?ticker=${encodeURIComponent(ticker)}`);
+      return r.ok ? r.json() : null;
+    } catch { return null; }
+  };
+  const [bb, sh, dv] = await Promise.all([fetchHist("buybacks"), fetchHist("shares_outstanding"), fetchDivs()]);
+  if (!lastBriefing || lastBriefing.ticker !== ticker) return; // stale
+  if (!bb || !sh || !dv) return;
+  const built = cashReturnQuarters(bb.series, sh.series, dv.rows);
+  if (!built) return;
+  const labels = built.quarters.map((q) => quarterLabel(q.period_end));
+  const bbData = built.quarters.map((q) => q.buybacks_usd / 1e9);
+  const dvData = built.quarters.map((q) => q.dividends_usd == null ? null : q.dividends_usd / 1e9);
+  setChartEmpty("cashreturn", false);
+  makeChart("cashreturn", "bar", labels, [
+    { label: "Buybacks ($B)", data: bbData, backgroundColor: "#1d4ed8" },
+    { label: "Dividends ($B)", data: dvData, backgroundColor: "#60a5fa" },
+  ], {
+    scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: (v) => `$${v}B` } } },
+    plugins: { tooltip: { callbacks: { label: (ctx) => {
+      const q = built.quarters[ctx.dataIndex];
+      const seg = ctx.datasetIndex === 0
+        ? `Buybacks: ${fmtMoney(q.buybacks_usd)}`
+        : `Dividends: ${q.dividends_usd == null ? "—" : fmtMoney(q.dividends_usd)}`;
+      const total = q.buybacks_usd + (q.dividends_usd || 0);
+      const flag = q.dividends_omitted && ctx.datasetIndex === 0
+        ? " (dividends segment omitted — no share count for this quarter)" : "";
+      return `${seg} · Total: ${fmtMoney(total)}${flag}`;
+    } } } },
+  });
+  const foot = $("b-cashreturn-footer");
+  const parts = ["Dividends per quarter = per-share dividends in the quarter × the nearest reported share count at or before the quarter end — an approximation."];
+  if (built.omitted) parts.push(`${built.omitted} quarter${built.omitted === 1 ? "" : "s"} with no buybacks or dividends are not shown.`);
+  setText(foot, parts.join(" "));
+  foot.hidden = false;
+  show(sec, true);
+}
+
+// Feature 18: the units block is N-way — one line per company,
+// "—" for a company missing an input, and the block still
+// renders when at least two companies have values (for the 2-way
+// case that is the same as before: both must have values).
+async function renderUnitEconomics(tickers) {
   const box = $("comparison-units");
   if (!box) return;
   const fetchHist = async (t, m) => {
@@ -2279,10 +2745,7 @@ async function renderUnitEconomics(baseTicker, secondTicker) {
       return r.ok ? r.json() : null;
     } catch { return null; }
   };
-  const [revB, hcB, revS, hcS] = await Promise.all([
-    fetchHist(baseTicker, "total_revenue"), fetchHist(baseTicker, "headcount"),
-    fetchHist(secondTicker, "total_revenue"), fetchHist(secondTicker, "headcount"),
-  ]);
+  const payloads = await Promise.all(tickers.flatMap((t) => [fetchHist(t, "total_revenue"), fetchHist(t, "headcount")]));
   const perEmployee = (rev, hc) => {
     const r = rev && rev.series && rev.series.length ? rev.series[rev.series.length - 1] : null;
     const h = hc && hc.series && hc.series.length ? hc.series[hc.series.length - 1] : null;
@@ -2290,11 +2753,16 @@ async function renderUnitEconomics(baseTicker, secondTicker) {
     return { value: r.value / h.value, revLabel: r.label, revValue: r.value,
       hcLabel: h.label, hcValue: h.value };
   };
-  const b = perEmployee(revB, hcB), s = perEmployee(revS, hcS);
-  if (!b || !s) { show(box, false); box.innerHTML = ""; return; }
-  box.innerHTML = `<h4>Per unit</h4><p class="body-text">${esc(baseTicker)}: ${fmtMoney(b.value)} revenue per employee — ${fmtMoney(b.revValue)} revenue (${esc(b.revLabel)}) ÷ ${esc(Number(b.hcValue).toLocaleString())} employees (${esc(b.hcLabel)}).<br>`
-    + `${esc(secondTicker)}: ${fmtMoney(s.value)} revenue per employee — ${fmtMoney(s.revValue)} revenue (${esc(s.revLabel)}) ÷ ${esc(Number(s.hcValue).toLocaleString())} employees (${esc(s.hcLabel)}).</p>`
-    + `<p class="meta">Revenue is the latest quarterly XBRL figure; headcount is the latest DEI-tagged 10-K figure. The row hides when either input is missing for either company.</p>`;
+  const values = tickers.map((t, i) => perEmployee(payloads[i * 2], payloads[i * 2 + 1]));
+  const have = values.filter((v) => v != null).length;
+  if (have < 2) { show(box, false); box.innerHTML = ""; return; }
+  const lines = tickers.map((t, i) => {
+    const v = values[i];
+    if (!v) return `${esc(t)}: —`;
+    return `${esc(t)}: ${fmtMoney(v.value)} revenue per employee — ${fmtMoney(v.revValue)} revenue (${esc(v.revLabel)}) ÷ ${esc(Number(v.hcValue).toLocaleString())} employees (${esc(v.hcLabel)}).`;
+  });
+  box.innerHTML = `<h4>Per unit</h4><p class="body-text">${lines.join("<br>")}</p>`
+    + `<p class="meta">Revenue is the latest quarterly XBRL figure; headcount is the latest DEI-tagged 10-K figure. The block shows when at least two companies have both inputs; a company missing one shows "—".</p>`;
   show(box, true);
 }
 
@@ -2354,6 +2822,8 @@ function render(b) {
   renderHistory(b.ticker);
   renderFilings(b.ticker);
   renderTrendTable(b.ticker);
+  renderDividends(b.ticker);
+  renderCashReturn(b.ticker);
   show($("sec-market"), Boolean(b.market_reaction));
   setText($("b-reaction"), b.market_reaction || "");
   setHTML($("b-story"), storyHtml(b.story || ""));
@@ -2633,6 +3103,29 @@ $("compare-search").addEventListener("input", async (e) => {
   renderCompareResults(matches);
 });
 
+// Feature 18: the third-company picker — the same directory
+// matcher as the first picker, with picks going to startCompare3.
+const addThirdBtn = $("compare-add-third");
+if (addThirdBtn) addThirdBtn.addEventListener("click", () => {
+  const picker = $("compare-third-picker");
+  if (picker) show(picker, true);
+  const search3 = $("compare-search-3");
+  if (search3) search3.focus();
+});
+const search3El = $("compare-search-3");
+if (search3El) search3El.addEventListener("input", async (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  const box = $("compare-results-3");
+  if (q.length < 2) { show(box, false); return; }
+  const dir = await loadDirectory();
+  if ($("compare-search-3").value.trim().toLowerCase() !== q) return;
+  const matches = dir.filter((c) =>
+    c.name.toLowerCase().includes(q) || c.ticker.toLowerCase().includes(q),
+  ).slice(0, 5);
+  if (!matches.length) { show(box, false); return; }
+  renderCompareResults3(matches);
+});
+
 // Copy comparison link (Batch 14): the link the compare run
 // restored into the URL — the pair the page shows, not the
 // second briefing's own ticker. Falls back to a textarea copy
@@ -2842,25 +3335,59 @@ applyTheme(currentTheme());
 // with ?quarter=Q2%202026 when the link names an older quarter.
 // ?ticker=BASE&compare=SECOND additionally runs the compare flow
 // once the base briefing finishes (Batch 14).
-try {
-  const params = new URLSearchParams(location.search);
+// Feature 17: the share link for a same-company compare carries
+// &compareQuarter=<label> alongside ?ticker=<T>&compare=<T>.
+// parseShareLink is a pure function so the round-trip is
+// harness-testable. An invalid compareQuarter is dropped, never
+// run as the latest quarter (getBriefing would turn a bad label
+// into ""), so a bad link restores the base briefing only.
+function parseShareLink(search) {
+  const params = new URLSearchParams(search || "");
   const param = params.get("ticker");
-  const qParam = params.get("quarter");
+  if (!param || !/^[A-Za-z]{1,10}$/.test(param.trim())) return null;
+  const baseTicker = param.trim().toUpperCase();
+  const out = { baseTicker, quarter: params.get("quarter") ? params.get("quarter").trim() : "", second: null, compareQuarter: null, third: null };
   const cParam = params.get("compare");
-  if (param && /^[A-Za-z]{1,10}$/.test(param.trim())) {
-    const baseTicker = param.trim().toUpperCase();
+  if (cParam && /^[A-Za-z]{1,10}$/.test(cParam.trim())) {
+    const second = cParam.trim().toUpperCase();
+    if (second !== baseTicker) {
+      out.second = second;
+      // Feature 18: the third company — only when it differs
+      // from both companies already in the comparison.
+      const tParam = params.get("compare2");
+      if (tParam && /^[A-Za-z]{1,10}$/.test(tParam.trim())) {
+        const third = tParam.trim().toUpperCase();
+        if (third !== baseTicker && third !== second) out.third = third;
+      }
+    } else {
+      const cq = params.get("compareQuarter");
+      if (cq && (/^Q[1-4] \d{4}$/.test(cq.trim()) || /^quarter ended \d{4}-\d{2}-\d{2}$/.test(cq.trim()))) {
+        out.second = second;
+        out.compareQuarter = cq.trim();
+      }
+    }
+  }
+  return out;
+}
+try {
+  const parsed = parseShareLink(location.search);
+  if (parsed) {
+    const { baseTicker, quarter, second, compareQuarter, third } = parsed;
     $("company-search").value = baseTicker;
-    if (cParam && /^[A-Za-z]{1,10}$/.test(cParam.trim()) && cParam.trim().toUpperCase() !== baseTicker) {
-      pendingAutoCompare = { second: cParam.trim().toUpperCase(), base: baseTicker };
+    if (second && !compareQuarter) {
+      pendingAutoCompare = { second, base: baseTicker };
+      if (third) pendingThirdCompare = third;
       const cs = $("compare-search");
-      if (cs) cs.value = cParam.trim().toUpperCase();
+      if (cs) cs.value = second;
+    } else if (second && compareQuarter) {
+      pendingAutoCompare = { second, base: baseTicker, compareQuarter };
     }
     // getBriefing validates the quarter itself (calendar "Qn YYYY"
     // and fiscal "quarter ended YYYY-MM-DD" both pass); the load
     // path must not pre-filter to calendar labels only, or a
     // shared fiscal link reloads as the latest quarter instead
     // of restoring its saved briefing (Batch 20 fix).
-    getBriefing(baseTicker, qParam ? qParam.trim() : "");
+    getBriefing(baseTicker, quarter);
   }
 } catch { /* a bad share link never breaks the page */ }
 

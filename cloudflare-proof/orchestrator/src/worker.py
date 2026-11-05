@@ -167,7 +167,10 @@ async def _writer_steps(pack, analysis, trace_id):
     inside the 300s agent timeout and the ~300s stream limit).
     The story call raises on failure — a briefing needs a
     story; the KPI and fine-print calls fall back to their
-    hiding results (the section hides). Returns
+    hiding results (the section hides). The KPI call is retried
+    once when it returns empty on exhaustion (Batch 43) —
+    Workers AI's 60s timeout on this prompt is load variance,
+    and a second attempt gets a fresh queue position. Returns
     (story_result, kpi_result, fine_print_result) for
     run_briefing_async to assemble into the Briefing."""
     async def _step(mode, key, fallback=None):
@@ -181,6 +184,26 @@ async def _writer_steps(pack, analysis, trace_id):
             return fallback
     story = await _step("story", "story_result")
     kpi = await _step("kpi", "kpi_result", {"items": [], "diagram": None, "source_url": ""})
+    if not kpi.get("items"):
+        # Batch 43: retry the KPI call ONCE on exhaustion. The
+        # direct call proved Workers AI answers this prompt in
+        # ~34s when the queue is quiet and times out at 60s when
+        # it is busy (same prompt, same window, 08:35 vs 09:57
+        # MST) — a second attempt gets a fresh queue position,
+        # and the gateway/OpenRouter legs are rate-limited for
+        # hours, so there is no other safety net. Retry only
+        # when no model ever replied (settled_on "exhausted")
+        # or the mode call itself failed (no debug at all) — a
+        # clean empty settle means two models agreed the release
+        # has no operating KPIs, and retrying that is waste.
+        # Cost: up to ~65s extra on the Writer phase when the
+        # first attempt fails (phase ~230s, run ~245s, inside
+        # the 300s stream gap limit).
+        dbg = kpi.get("debug") or {}
+        if dbg.get("settled_on") in (None, "exhausted"):
+            retry = await _step("kpi", "kpi_result", {"items": [], "diagram": None, "source_url": ""})
+            if retry.get("items") or retry.get("debug"):
+                kpi = retry
     fp = await _step("fineprint", "fine_print_result", {"items": [], "source_urls": []})
     return story, kpi, fp
 

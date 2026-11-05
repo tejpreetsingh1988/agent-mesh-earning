@@ -232,11 +232,20 @@
           <span class="label">Earlier quarters</span>
           <span id="quarter-buttons"></span>
         </div>
+        <p class="meta" id="fiscal-note" hidden></p>
         <div id="compare-box" class="compare-box">
           <span class="label">Compare with</span>
           <input id="compare-search" type="text" maxlength="100" autocomplete="off" spellcheck="false" placeholder="e.g. Nvidia, Costco, or NVDA">
           <div id="compare-results" class="search-results" hidden></div>
           <p id="compare-note" class="hint" hidden></p>
+          <div id="compare-third-box" hidden>
+            <button type="button" class="btn-secondary" id="compare-add-third">Add a third company</button>
+            <div id="compare-third-picker" hidden>
+              <span class="label">Third company</span>
+              <input id="compare-search-3" type="text" maxlength="100" autocomplete="off" spellcheck="false" placeholder="e.g. Nvidia, Costco, or NVDA">
+              <div id="compare-results-3" class="search-results" hidden></div>
+            </div>
+          </div>
           <p class="hint">Picks from the company directory. The second briefing runs for its latest quarter; the comparison names both quarters.</p>
         </div>
 
@@ -308,6 +317,12 @@
         <div id="comparison-verdicts" class="compare-verdicts"></div>
         <h4>Headline</h4>
         <div id="comparison-headline"></div>
+        <div class="card" id="growth-race-card" hidden>
+          <h4>Revenue growth race (indexed)</h4>
+          <div class="chart-wrap"><canvas id="chart-growth-race" height="190"></canvas></div>
+          <p class="chart-empty" id="chart-growth-race-empty">Fewer than 4 common quarters — no indexed chart.</p>
+          <p class="meta">Indexed revenue (100 = first common quarter), from SEC filing facts. Not a price chart.</p>
+        </div>
         <h4>All claims</h4>
         <div id="comparison-table"></div>
         <div id="comparison-units" hidden></div>
@@ -383,6 +398,22 @@
         <div class="chart-wrap"><canvas id="chart-long" height="190"></canvas></div>
         <p class="chart-empty" id="chart-long-empty">Run a briefing — this chart fills from the company's long history.</p>
         <p class="meta" id="chart-long-read" hidden></p>
+      </section>
+
+      <section class="card rail-card" id="chart-dividend-card" hidden>
+        <h3>Dividends</h3>
+        <p class="rail-hint">Last 4 Cash dividends, from Nasdaq. Past dividends only — never a promise of future payments.</p>
+        <div class="table-wrap"><table id="b-dividends"></table></div>
+        <p class="meta" id="b-dividend-yield" hidden></p>
+        <p class="meta" id="b-dividend-next" hidden></p>
+      </section>
+
+      <section class="card rail-card" id="chart-cashreturn-card" hidden>
+        <h3>Cash returned to shareholders</h3>
+        <p class="rail-hint">Buybacks vs dividends by quarter, from SEC filings and Nasdaq. Amounts only — a taller bar is not a better company.</p>
+        <div class="chart-wrap"><canvas id="chart-cashreturn" height="190"></canvas></div>
+        <p class="chart-empty" id="chart-cashreturn-empty">Run a briefing — this chart fills from the company's history.</p>
+        <p class="meta" id="b-cashreturn-footer" hidden></p>
       </section>
 
       <section class="card rail-card" id="glance-card">

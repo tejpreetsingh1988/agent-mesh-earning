@@ -207,3 +207,68 @@ def test_writer_steps_run_sequentially_story_kpi_fineprint(monkeypatch):
     assert order == ["story", "kpi", "fineprint"]
     assert story["model"] == "m"
     assert kpi["debug"]["settled_on"] == "items"
+
+
+def _load_orch_worker_main():
+    import importlib.util
+    import pathlib
+    spec = importlib.util.spec_from_file_location(
+        "orch_worker_main_retry_test",
+        pathlib.Path(__file__).resolve().parents[2] / "apps" / "orchestrator" / "worker_main.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _run_steps_with_kpi_script(monkeypatch, kpi_script):
+    # kpi_script: list of KPI results returned on successive KPI calls.
+    mod = _load_orch_worker_main()
+    order = []
+    kpi_calls = {"n": 0}
+
+    async def fake_agent_call(agent, payload):
+        mode = payload["mode"]
+        order.append(mode)
+        if mode == "story":
+            return {"story_result": {"story": "s", "model": "m"}}
+        if mode == "kpi":
+            res = kpi_script[min(kpi_calls["n"], len(kpi_script) - 1)]
+            kpi_calls["n"] += 1
+            return {"kpi_result": res}
+        return {"fine_print_result": {"items": [], "source_urls": []}}
+
+    monkeypatch.setattr(mod, "_agent_call", fake_agent_call)
+    story, kpi, fp = asyncio.run(mod._writer_steps(_pack_dict(), _analysis_dict(), "t"))
+    return order, kpi
+
+
+def test_writer_steps_retries_kpi_once_on_exhaustion(monkeypatch):
+    # Batch 43: the first KPI call exhausts (no model ever replied);
+    # the second attempt returns items. Order: story, kpi, kpi, fineprint.
+    exhausted = {"items": [], "diagram": None, "source_url": "",
+                 "debug": {"settled_on": "exhausted", "replies": 0}}
+    good = {"items": [{"name": "Same Shop Sales Growth", "value": "5.4%"}],
+            "diagram": None, "source_url": "https://sec.gov/99.1",
+            "debug": {"settled_on": "items", "replies": 1}}
+    order, kpi = _run_steps_with_kpi_script(monkeypatch, [exhausted, good])
+    assert order == ["story", "kpi", "kpi", "fineprint"]
+    assert kpi["items"][0]["value"] == "5.4%"
+
+
+def test_writer_steps_does_not_retry_kpi_on_clean_empty(monkeypatch):
+    # Batch 43: two models agreed the release has no operating KPIs —
+    # a clean empty settle is a legitimate outcome, not a failure.
+    empty = {"items": [], "diagram": None, "source_url": "",
+             "debug": {"settled_on": "empty", "replies": 2}}
+    order, kpi = _run_steps_with_kpi_script(monkeypatch, [empty])
+    assert order == ["story", "kpi", "fineprint"]
+    assert kpi["items"] == []
+
+
+def test_writer_steps_does_not_retry_kpi_when_items_returned(monkeypatch):
+    good = {"items": [{"name": "Same Shop Sales Growth", "value": "5.4%"}],
+            "diagram": None, "source_url": "https://sec.gov/99.1",
+            "debug": {"settled_on": "items", "replies": 1}}
+    order, kpi = _run_steps_with_kpi_script(monkeypatch, [good])
+    assert order == ["story", "kpi", "fineprint"]
+    assert len(kpi["items"]) == 1
