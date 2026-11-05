@@ -100,7 +100,7 @@ def test_vendored_copies_match_repo():
     pairs = [
         (_CRITIC_SRC, ["critic_async.py", "critic.py", "analyst.py", "worker_http.py",
                        "async_tools.py", "agent_app.py"]),
-        (_WRITER_SRC, ["story_async.py", "writer.py", "llm.py", "worker_http.py", "agent_app.py"]),
+        (_WRITER_SRC, ["story_async.py", "worker_env.py", "writer.py", "llm.py", "worker_http.py", "agent_app.py"]),
         (_ORCH_SRC, ["orchestrator_async.py", "orchestrator.py", "writer.py", "llm.py",
                      "worker_http.py", "agent_app.py"]),
     ]
@@ -129,11 +129,30 @@ def test_proof_critic_pass_with_requery(monkeypatch):
 
 
 def test_proof_writer_uses_async_story(monkeypatch):
-    async def _fake_story(pack, analysis):
+    async def _fake_story(pack, analysis, **kwargs):
         return {"story": "Test story paragraph one.\n\nTest story paragraph two.",
                 "model": "test-model", "tokens_in": 5, "tokens_out": 6, "latency_s": 0.1}
 
-    monkeypatch.setattr(_WRITER_PROOF, "build_story_async", _fake_story)
+    async def _fake_kpis(ticker, quarter_end, ai=None, api_key=""):
+        return ([], None, "")
+
+    async def _fake_fp(ticker, quarter_end, label, ai=None, api_key=""):
+        return ([], [])
+
+    # Batch 33: the proof no longer calls build_story_async
+    # directly — the three steps run concurrently inside
+    # run_writer_steps_async, whose names live in the vendored
+    # mesh.writer_pipeline module globals. Lock the shape: no
+    # sequential awaits may come back.
+    proof_src = (_WRITER_SRC / "worker.py").read_text()
+    assert "run_writer_steps_async" in proof_src
+    assert "await build_story_async" not in proof_src
+    assert "await kpis_for_pack_async" not in proof_src
+    assert "await fineprint_for_pack_async" not in proof_src
+    _pipe_globals = _WRITER_PROOF.run_writer_steps_async.__globals__
+    monkeypatch.setitem(_pipe_globals, "build_story_async", _fake_story)
+    monkeypatch.setitem(_pipe_globals, "kpis_for_pack_async", _fake_kpis)
+    monkeypatch.setitem(_pipe_globals, "fineprint_for_pack_async", _fake_fp)
     res = TestClient(_WRITER_PROOF.app).post("/tasks/send", json={
         "evidence_pack": _pack_dict(), "analysis": _analysis_dict(),
         "trace_id": "trace-test"}).json()
