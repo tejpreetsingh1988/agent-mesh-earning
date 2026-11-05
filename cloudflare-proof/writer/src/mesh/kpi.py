@@ -179,7 +179,18 @@ def parse_kpi_response(text: str) -> tuple:
     try:
         obj = json.loads(cleaned[start:end + 1])
     except (ValueError, TypeError):
-        return [], None, False
+        # Batch 36: small models often emit a trailing comma before
+        # } or ] — the one repair that is unambiguous, so retry once
+        # with trailing commas stripped. Anything else garbled
+        # (unclosed strings, truncated output) still fails cleanly.
+        repaired = re.sub(r",\s*([}\]])", r"\1", cleaned[start:end + 1])
+        if repaired != cleaned[start:end + 1]:
+            try:
+                obj = json.loads(repaired)
+            except (ValueError, TypeError):
+                return [], None, False
+        else:
+            return [], None, False
     if not isinstance(obj, dict):
         return [], None, False
     items = obj.get("kpis", obj.get("metrics", []))
@@ -363,13 +374,15 @@ def fetch_release_text_sync(ticker: str, quarter_end_iso: str):
     return None, ""
 
 
-def _settle_reply(text: str, release_text: str):
+def _settle_reply(text: str, release_text: str, allow_empty: bool = True):
     """Settle one extraction reply: (settled?, (items, diagram)).
-    Settled when the reply yields valid KPIs or a valid diagram,
-    or when it parses cleanly to nothing at all (the release has
-    nothing — stop the chain, don't burn more models). Unsettled
-    when the reply is garbled or everything in it fails validation
-    (try the next model)."""
+    Settled when the reply yields valid KPIs or a valid diagram.
+    A clean-empty parse settles only when allow_empty: the first
+    model that returns successfully must never settle on empty —
+    a small model often misses KPIs the next model finds (Batch 36:
+    BROS's release has KPIs, but the chain stopped after one empty
+    reply). Unsettled when the reply is garbled or everything in
+    it fails validation (try the next model)."""
     items, draw_raw, ok = parse_kpi_response(text)
     if not ok:
         return False, None
@@ -378,7 +391,7 @@ def _settle_reply(text: str, release_text: str):
     if valid or diagram is not None:
         return True, (valid, diagram)
     if items == [] and draw_raw is None:
-        return True, ([], None)
+        return (True, ([], None)) if allow_empty else (False, None)
     return False, None
 
 
@@ -388,11 +401,17 @@ async def extract_kpis_async(release_text: str, llm_call=None, ai=None, api_key:
     (kpi items, diagram-or-None). No deterministic fallback: no
     KPIs and no diagram is a valid, hiding result."""
     system, user = kpi_prompt(release_text)
+    # Batch 36: allow_empty turns on only from the SECOND model
+    # that returns successfully — a single empty verdict never
+    # ends the chain. `replies` counts successful returns only:
+    # a timeout or provider error does not count as an opinion.
+    replies = 0
     if ai is not None:
         try:
             result = await asyncio.wait_for(call_workers_ai(ai, WORKERS_AI_MODEL, system, user),
                                             timeout=WORKERS_AI_TIMEOUT_S)
-            settled, out = _settle_reply((result or {}).get("text", ""), release_text)
+            replies += 1
+            settled, out = _settle_reply((result or {}).get("text", ""), release_text, allow_empty=replies > 1)
             if settled:
                 return out
         except Exception:
@@ -401,7 +420,8 @@ async def extract_kpis_async(release_text: str, llm_call=None, ai=None, api_key:
             try:
                 result = await asyncio.wait_for(call_gateway_binding(ai, model, system, user),
                                                 timeout=GATEWAY_TIMEOUT_S)
-                settled, out = _settle_reply((result or {}).get("text", ""), release_text)
+                replies += 1
+                settled, out = _settle_reply((result or {}).get("text", ""), release_text, allow_empty=replies > 1)
                 if settled:
                     return out
             except Exception:
@@ -412,7 +432,8 @@ async def extract_kpis_async(release_text: str, llm_call=None, ai=None, api_key:
     for model in MODELS:
         try:
             result = await asyncio.wait_for(caller(model, system, user), timeout=60)
-            settled, out = _settle_reply((result or {}).get("text", ""), release_text)
+            replies += 1
+            settled, out = _settle_reply((result or {}).get("text", ""), release_text, allow_empty=replies > 1)
             if settled:
                 return out
         except Exception:
@@ -444,10 +465,15 @@ def extract_kpis_sync(release_text: str, llm_call=None, api_key: str = ""):
         return [], None
     system, user = kpi_prompt(release_text)
     caller = llm_call or (lambda model, s, u: _call_openrouter(model, s, u, api_key))
+    # Batch 36: same rule as the async twin — a single empty
+    # verdict never ends the chain; only the second successful
+    # reply may settle on empty.
+    replies = 0
     for model in MODELS:
         try:
             result = caller(model, system, user)
-            settled, out = _settle_reply((result or {}).get("text", ""), release_text)
+            replies += 1
+            settled, out = _settle_reply((result or {}).get("text", ""), release_text, allow_empty=replies > 1)
             if settled:
                 return out
         except Exception:
