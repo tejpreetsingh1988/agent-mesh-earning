@@ -111,3 +111,73 @@ def test_fineprint_for_pack_sync_hides_on_llm_failure(monkeypatch):
     items, urls = fp.fineprint_for_pack_sync(
         "MSFT", "2026-09-30", "quarter ended 2026-09-30", llm_call=failing_llm)
     assert items == [] and urls == []
+
+
+# Newline-free text modelled on a real NVDA 10-Q (Nov 5, 2026):
+# strip_html collapses the whole filing to ONE line, so the old
+# line-based extract_sections matched both headings on line 0
+# and returned the first 60k chars of XBRL header junk for BOTH
+# sections. The offset-based version must find the real headings
+# past the table of contents and the "See accompanying" footers.
+ONE_LINE_Q = (
+    "Table of Contents Page Part I Financial Information Item 1. Financial Statements "
+    "a) Condensed Consolidated Statements of Income 1 f) Notes to Condensed Consolidated "
+    "Financial Statements 8 Item 2. Management's Discussion and Analysis of Financial "
+    "Condition and Results of Operations 23 Item 3. Quantitative and Qualitative "
+    "Disclosures About Market Risk 30 Item 4. Controls and Procedures 31 "
+    "NVIDIA Corporation and Subsidiaries Condensed Consolidated Statements of Income "
+    "Revenue 81615 Cost of revenue 12000 See accompanying Notes to Condensed Consolidated "
+    "Financial Statements. NVIDIA Corporation and Subsidiaries Notes to Condensed "
+    "Consolidated Financial Statements Note 1 describes the basis of presentation and "
+    "the significant accounting policies used in these statements. The company recorded "
+    "a new warranty accrual of forty million dollars in the current quarter period. "
+    "NVIDIA Corporation and Subsidiaries Notes to Condensed Consolidated Financial "
+    "Statements (Continued) (Unaudited) Later note text about lease obligations here. "
+    "22 Item 2. Management's Discussion and Analysis of Financial Condition and Results "
+    "of Operations Forward-Looking Statements This quarterly report contains forward "
+    "looking statements about demand for accelerated computing products worldwide. "
+    "Revenue grew on strong data center demand across hyperscale customers this quarter. "
+    "Item 3. Quantitative and Qualitative Disclosures About Market Risk The company is "
+    "exposed to market risk from changes in foreign currency exchange rates worldwide."
+)
+
+
+def test_extract_sections_newline_free_filing():
+    secs = fp.extract_sections(ONE_LINE_Q)
+    assert secs["mda"] != secs["notes"]
+    assert "forward looking statements about demand" in secs["mda"]
+    assert "Revenue grew on strong data center demand" in secs["mda"]
+    assert "Table of Contents" not in secs["mda"]
+    assert "warranty accrual of forty million dollars" not in secs["mda"]
+    assert "basis of presentation" in secs["notes"]
+    assert "warranty accrual of forty million dollars" in secs["notes"]
+    assert "Table of Contents" not in secs["notes"]
+    assert "forward looking statements about demand" not in secs["notes"]
+    # The notes section ends at Item 2 (MD&A); MD&A ends at Item 3.
+    assert "market risk from changes in foreign currency" not in secs["mda"]
+
+
+def test_diff_paragraphs_fast_and_still_accurate():
+    """Regression (Nov 5, 2026): the naive diff ran difflib
+    against every previous sentence per current sentence —
+    ~1.7s CPU on a real 10-Q pair, killing the Writer at the
+    2,000ms CPU budget. The indexed version must stay fast on
+    130x130 sentences and keep the changed/new distinction."""
+    import time
+    base = [f"Operating segment {i} generated revenue of {100 + i} million dollars "
+            f"from enterprise customers in the region this quarter." for i in range(130)]
+    prev = list(base)
+    cur = list(base[:100])
+    # 30 changed: one word swapped, still a close match.
+    cur += [s.replace("enterprise customers", "hyperscale customers") for s in base[100:130]]
+    # 30 genuinely new sentences.
+    cur += [f"New disclosure {i}: the company settled a patent dispute involving "
+            f"graphics processors and paid an amount in the quarter." for i in range(30)]
+    t0 = time.process_time()
+    new, changed = fp.diff_paragraphs(cur, prev)
+    elapsed = time.process_time() - t0
+    assert elapsed < 0.5, f"diff took {elapsed:.2f}s CPU"
+    assert len(changed) == 30, f"expected 30 changed, got {len(changed)}"
+    assert len(new) == 30, f"expected 30 new, got {len(new)}"
+    assert "hyperscale customers" in changed[0]
+    assert "patent dispute" in new[0]
