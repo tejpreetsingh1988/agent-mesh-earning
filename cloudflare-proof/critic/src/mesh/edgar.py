@@ -61,9 +61,37 @@ def list_recent_filings(ticker: str, limit: int = 10) -> dict:
         })
     return {"ticker": facts["ticker"], "company_name": facts["company_name"], "cik": facts["cik"], "filings": out}
 
+_EARNINGS_ITEM_RE = re.compile(r"item\s+2\.02", re.IGNORECASE)
+_MAX_EARNINGS_CANDIDATES = 6
+
+
+def _is_earnings_8k_text(clean_text: str) -> bool:
+    """True when a cleaned 8-K head furnishes an earnings release.
+
+    Earnings releases are furnished under Item 2.02 (Results of
+    Operations and Financial Condition). The heading is the signal,
+    not an exhibit name: some companies inline the release in the
+    8-K body (NVDA does — no separate exhibit 99.1 exists), so an
+    exhibit-99.1 check alone would miss them.
+    """
+    return bool(_EARNINGS_ITEM_RE.search(clean_text or ""))
+
+
 def get_latest_earnings_filing(ticker: str) -> dict:
-    """Most recent 8-K — earnings releases are filed as 8-K Item 2.02.
-    If no 8-K is recent, fall back to the most recent filing overall.
+    """Most recent 8-K that furnishes an earnings release (Item 2.02).
+
+    The most recent 8-K is often NOT the earnings release:
+    frequent filers file 8-Ks for meetings, debt, and other items
+    between quarters. NVDA, Nov 2026: the Sep 3, 2026 8-K is not
+    earnings; the Aug 26, 2026 one is — and the old most-recent-8-K
+    pick anchored consensus + price reaction to Sep 3, so the
+    July briefing carried no consensus even though Nasdaq had
+    NVDA's Aug 26 row ($2.22 vs $2.09 forecast). The walk checks
+    each recent 8-K's primary document head (first 12k chars) for
+    Item 2.02, newest first, and falls back to the most recent
+    8-K when none matches — never fail the briefing over
+    identification. If no 8-K is recent, fall back to the most
+    recent filing overall.
     Returns metadata + a cleaned text excerpt, not a full parse.
     """
     facts = get_company_facts(ticker)
@@ -71,13 +99,19 @@ def get_latest_earnings_filing(ticker: str) -> dict:
         return facts
     sub = _submissions(facts["cik_padded"])
     recent = sub["filings"]["recent"]
+    eights = [(i, recent["accessionNumber"][i], recent["primaryDocument"][i])
+              for i, form in enumerate(recent["form"]) if form == "8-K"][:_MAX_EARNINGS_CANDIDATES]
     idx = None
-    for i, form in enumerate(recent["form"]):
-        if form == "8-K":
+    for i, acc, doc in eights:
+        try:
+            head = get_filing_text(ticker, acc, doc, max_chars=12000).get("excerpt", "")
+        except Exception:
+            continue
+        if _is_earnings_8k_text(head):
             idx = i
             break
     if idx is None:
-        idx = 0
+        idx = eights[0][0] if eights else 0
     acc = recent["accessionNumber"][idx]
     doc = recent["primaryDocument"][idx]
     url = f"https://www.sec.gov/Archives/edgar/data/{facts['cik']}/{acc.replace('-', '')}/{doc}"
@@ -85,7 +119,7 @@ def get_latest_earnings_filing(ticker: str) -> dict:
         "ticker": facts["ticker"], "company_name": facts["company_name"], "cik": facts["cik"],
         "form": recent["form"][idx], "filingDate": recent["filingDate"][idx],
         "accessionNumber": acc, "primaryDocument": doc, "url": url,
-        "note": "8-K is the usual earnings-release filing. Verify the quarter in the document text — do not assume it from the filing date alone.",
+        "note": "Most recent 8-K furnishing an earnings release (Item 2.02). Verify the quarter in the document text — do not assume it from the filing date alone.",
     }
 
 def _clean_html(html_text: str) -> str:
