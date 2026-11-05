@@ -647,5 +647,25 @@
   {
     "name": "Lucid Group, Inc.",
     "ticker": "LCID"
+  },
+  {
+    "name": "Snap Inc.",
+    "ticker": "SNAP"
+  },
+  {
+    "name": "Sezzle Inc.",
+    "ticker": "SEZL"
+  },
+  {
+    "name": "Credo Technology Group Holding Ltd",
+    "ticker": "CRDO"
+  },
+  {
+    "name": "IREN Ltd",
+    "ticker": "IREN"
+  },
+  {
+    "name": "Altria Group, Inc.",
+    "ticker": "MO"
   }
 ]
