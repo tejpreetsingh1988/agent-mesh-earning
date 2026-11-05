@@ -59,11 +59,34 @@ _QUARTER_END_MONTH = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}
 
 def _quarter_end_from_label(label: str) -> str | None:
     """'Q2 2026' -> '2026-06-30' (calendar quarters, the same mapping
-    _quarter_label uses in reverse). None when unparseable."""
+    _quarter_label uses in reverse); 'quarter ended 2026-07-26' ->
+    '2026-07-26' (the fiscal fallback label _quarter_label emits for
+    non-calendar month ends). None when unparseable."""
     m = re.match(r"^\s*Q([1-4])\s+(\d{4})\s*$", label or "")
-    if not m:
-        return None
-    return f"{m.group(2)}-{_QUARTER_END_MONTH[int(m.group(1))]}"
+    if m:
+        return f"{m.group(2)}-{_QUARTER_END_MONTH[int(m.group(1))]}"
+    m = re.match(r"^\s*quarter ended (\d{4}-\d{2}-\d{2})\s*$", label or "")
+    if m:
+        try:
+            date.fromisoformat(m.group(1))
+        except ValueError:
+            return None
+        return m.group(1)
+    return None
+
+
+def _same_fiscal_month(a: str, b: str) -> bool:
+    """Month-granularity equality for quarter ends. Nasdaq reports
+    fiscal quarters as month/year, so its month-end (2026-07-31)
+    and a fiscal actual end (2026-07-26) are the same quarter even
+    though the dates differ. Exact-date equality would reject
+    every fiscal quarter, so the filing confirmation and the
+    consensus guard both compare months, not days."""
+    try:
+        da, db = date.fromisoformat(a), date.fromisoformat(b)
+    except ValueError:
+        return False
+    return (da.year, da.month) == (db.year, db.month)
 
 
 def _shift_days(iso: str, days: int) -> str:
@@ -78,12 +101,14 @@ def _pick_quarter_filing(candidates, requested_end, endings):
     accessionNumber -> fiscal quarter end (or None) from the
     consensus probe. Returns (filing_or_None, confirmed_bool):
     the first candidate (earliest filingDate) whose probed
-    quarter end equals requested_end wins, confirmed; otherwise
-    the earliest candidate, unconfirmed; None when no candidate.
+    quarter end is in the same fiscal month as requested_end
+    wins, confirmed; otherwise the earliest candidate,
+    unconfirmed; None when no candidate.
     """
     ordered = sorted(candidates, key=lambda f: f.get("filingDate") or "")
     for f in ordered:
-        if endings.get(f.get("accessionNumber")) == requested_end:
+        probed = endings.get(f.get("accessionNumber"))
+        if probed and _same_fiscal_month(probed, requested_end):
             return f, True
     if ordered:
         return ordered[0], False
@@ -96,7 +121,8 @@ def _now() -> datetime:
 
 def collect_evidence(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
     """Build an EvidencePack for ticker's most recent reported quarter,
-    or for `quarter` ("Q2 2026") when given: the 8-K, facts,
+    or for `quarter` ("Q2 2026", or a fiscal label like
+    "quarter ended 2026-07-26") when given: the 8-K, facts,
     consensus and transcript are then anchored to that quarter
     instead of the latest one. A quarter label used to be a label
     override only — since Batch 7 it selects the quarter for real,
@@ -325,10 +351,13 @@ def collect_evidence(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
     # Requested quarter: a consensus row for a different quarter
     # end must not feed a beat/miss. This only bites on the
     # unconfirmed-filing fallback — a confirmed filing's row
-    # already matches by construction.
+    # already matches by construction. The comparison is by
+    # fiscal month, not exact date: Nasdaq's month-end and a
+    # fiscal actual end (e.g. 2026-07-31 vs 2026-07-26) are the
+    # same quarter.
     if requested_end and isinstance(consensus, dict) and consensus.get("fiscal_quarter_ending"):
         cons_end = _month_end_from_nasdaq(consensus["fiscal_quarter_ending"])
-        if cons_end and cons_end != requested_end:
+        if cons_end and not _same_fiscal_month(cons_end, requested_end):
             missing.append(f"Consensus row is for the quarter ending {cons_end}, not the requested {requested_end} — consensus not used for beat/miss.")
             consensus = None
 
