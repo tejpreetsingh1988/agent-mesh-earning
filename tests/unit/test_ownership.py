@@ -83,6 +83,30 @@ def test_fetch_ownership_async_shapes_and_failure():
     assert out2 == {"ticker": "MSFT", "insiders": None, "funds": None}
 
 
+def test_fetch_ownership_async_sends_browser_ua():
+    """Regression (Nov 5, 2026): Nasdaq's company endpoints hang a
+    non-browser UA — the Worker-side /ownership route returned nulls
+    for both cards until the fetch used a browser UA. The fake
+    captures the headers of both requests."""
+    seen = []
+
+    async def capturing_fetch(url, headers=None):
+        seen.append(headers or {})
+        if "insider-trades" in url:
+            return _insiders_payload()
+        if "institutional-holdings" in url:
+            return _funds_payload()
+        raise AssertionError(url)
+
+    out = asyncio.run(own.fetch_ownership_async("MSFT", fetch_json=capturing_fetch))
+    assert out["insiders"] is not None and out["funds"] is not None
+    assert len(seen) == 2
+    for headers in seen:
+        assert headers.get("Accept") == "application/json"
+        assert headers.get("User-Agent", "").startswith("Mozilla/5.0")
+        assert "agent-mesh-earnings" not in headers.get("User-Agent", "")
+
+
 def test_fetch_ownership_async_validates_ticker():
     async def unused(url, headers=None):
         raise AssertionError("must not fetch")
