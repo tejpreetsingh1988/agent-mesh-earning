@@ -309,3 +309,19 @@ def test_kpis_for_pack_async_debug_no_text(monkeypatch):
     assert debug["fetched_chars"] == 0
     assert debug["fetched_url"] == ""
     assert debug["settled_on"] == "no_text"
+
+
+def test_extract_kpis_async_debug_records_leg_errors(monkeypatch):
+    # Batch 39: when every model raises, the debug dict names each
+    # leg's failure instead of leaving replies: 0 unexplained.
+    monkeypatch.setattr(kpi, "MODELS", ["m1", "m2"])
+    debug = {}
+
+    async def fake_llm(model, system, user):
+        raise RuntimeError("HTTP 429 rate limited")
+
+    assert asyncio.run(kpi.extract_kpis_async("release text", llm_call=fake_llm, debug=debug)) == ([], None)
+    assert debug["replies"] == 0
+    assert debug["settled_on"] == "exhausted"
+    assert [e["leg"] for e in debug["errors"]] == ["openrouter:m1", "openrouter:m2"]
+    assert all("RuntimeError: HTTP 429" in e["error"] for e in debug["errors"])

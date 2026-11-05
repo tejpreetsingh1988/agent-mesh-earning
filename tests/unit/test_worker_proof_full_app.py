@@ -133,7 +133,7 @@ def test_proof_writer_uses_async_story(monkeypatch):
         return {"story": "Test story paragraph one.\n\nTest story paragraph two.",
                 "model": "test-model", "tokens_in": 5, "tokens_out": 6, "latency_s": 0.1}
 
-    async def _fake_kpis(ticker, quarter_end, ai=None, api_key=""):
+    async def _fake_kpis(ticker, quarter_end, ai=None, api_key="", debug=None):
         return ([], None, "")
 
     async def _fake_fp(ticker, quarter_end, label, ai=None, api_key=""):
@@ -169,7 +169,7 @@ def test_proof_writer_uses_async_story(monkeypatch):
     # Batch 34: a mode=kpi call returns only the KPI result
     # (proves the transform mapped the mode branch, not the
     # sync urllib call — a missed replace would fetch live).
-    async def _fake_kpis_items(ticker, quarter_end, ai=None, api_key=""):
+    async def _fake_kpis_items(ticker, quarter_end, ai=None, api_key="", debug=None):
         return ([{"metric": "SSS", "value": "5%"}], {"nodes": []}, "https://sec.gov/991")
 
     monkeypatch.setitem(_pipe_globals, "kpis_for_pack_async", _fake_kpis_items)
@@ -179,7 +179,7 @@ def test_proof_writer_uses_async_story(monkeypatch):
     assert res["state"] == "completed"
     assert res["result"] == {"kpi_result": {
         "items": [{"metric": "SSS", "value": "5%"}], "diagram": {"nodes": []},
-        "source_url": "https://sec.gov/991"}}
+        "source_url": "https://sec.gov/991", "debug": {"settled_on": "incomplete"}}}
 
 
 def test_proof_orchestrator_chains_agents(monkeypatch):
