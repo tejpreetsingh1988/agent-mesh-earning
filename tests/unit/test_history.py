@@ -146,3 +146,31 @@ def test_history_for_ticker_validation():
         pass
     else:
         raise AssertionError("expected ValueError for bad metric")
+
+
+def test_history_for_ticker_gaap_eps(monkeypatch):
+    # Feature 13: gaap_eps is an allowed history metric — the
+    # trend table's EPS column reads this series. Values are raw
+    # USD per share (not scaled to billions).
+    assert "gaap_eps" in hist.QUARTERLY_METRICS
+    assert hist.METRIC_LABELS["gaap_eps"] == "GAAP EPS"
+    rows = [{"period_end": "2025-03-31", "value": 3.10, "unit": "USD"},
+            {"period_end": "2024-12-31", "value": 2.90, "unit": "USD"},
+            {"period_end": "2024-09-30", "value": 2.50, "unit": "USD"}]
+
+    async def fake_company_facts(ticker):
+        return {"ticker": ticker, "cik": 789019, "cik_padded": "0000789019"}
+
+    async def fake_qfacts(cik, limit=40, companyfacts_fetch=None):
+        return {"gaap_eps": {"tag": "EarningsPerShareDiluted",
+                             "rows": rows}}
+
+    async def fake_nasdaq(url, headers=None):
+        return {"data": {"tradesTable": {"rows": []},
+                         "dividends": {"rows": []}}}
+
+    monkeypatch.setattr(hist, "async_get_company_facts", fake_company_facts)
+    monkeypatch.setattr(hist, "async_get_quarterly_facts", fake_qfacts)
+    out = asyncio.run(hist.history_for_ticker("MSFT", "gaap_eps", fetch_json=fake_nasdaq))
+    assert out["metric"] == "gaap_eps" and out["unit"] == "USD"
+    assert [p["value"] for p in out["series"]] == [2.50, 2.90, 3.10]
