@@ -1581,11 +1581,18 @@ function prevQuarters(label, count) {
 // real period ends, newest first, excluding the current quarter.
 // The buttons show the short label ("Jul 2026") but carry the
 // full fiscal label, which the backend now accepts.
+// Only periods carrying a core-metric fact count as quarter ends:
+// the fact list also holds cover-page as-of dates (shares
+// outstanding as of 2026-08-21, 2026-05-15, ...), which are not
+// quarters — they used to crowd real quarters (Jan 2026) out of
+// the top-3 window and invent bogus options ("May 2026").
+// (Batch 37, Nov 5, 2026.)
+const PICKER_CORE_METRICS = new Set(["total_revenue", "operating_income", "net_income", "gaap_eps"]);
 function prevFiscalQuarters(label, facts, count) {
   const m = /^quarter ended (\d{4}-\d{2}-\d{2})$/.exec(label || "");
   if (!m) return [];
   const current = m[1];
-  const ends = [...new Set((facts || []).map((f) => f.period).filter((p) =>
+  const ends = [...new Set((facts || []).filter((f) => PICKER_CORE_METRICS.has(f.metric)).map((f) => f.period).filter((p) =>
     /^\d{4}-\d{2}-\d{2}$/.test(p || "")))].filter((p) => p < current).sort().reverse();
   return ends.slice(0, count).map((p) => `quarter ended ${p}`);
 }
