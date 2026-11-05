@@ -2592,8 +2592,23 @@ function listCachedBriefings() {
     }
   } catch { return []; }
   items.sort((a, b) => b.savedAt - a.savedAt);
-  return items.slice(0, 8);
+  return dedupeBriefingItems(items).slice(0, 8);
 }
+// [PHASE1-PURE:dedupeBriefingItems]
+// One chip per (ticker, quarter label): the same briefing can sit under
+// several cache keys (legacy ame_briefing_<T>, LATEST, explicit quarter),
+// and each key used to render its own identical chip — NVDA · Jul 2026
+// showed four times live (Nov 5, 2026). Keep the newest save per label.
+function dedupeBriefingItems(items) {
+  const seen = new Set();
+  return items.filter((it) => {
+    const k = `${it.ticker}|${it.label}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+// [/PHASE1-PURE]
 // Short chip label for a quarter: "quarter ended 2026-08-30" is
 // too long for a chip, so it reads "Aug 2026". Calendar labels
 // ("Q3 2026") pass through unchanged. Display only — the briefing
