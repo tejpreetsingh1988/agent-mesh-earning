@@ -73,3 +73,53 @@ Frontend (`web/app.js`):
 - The 75-day 8-K window and 50-filing limit from
   Batch 7 still bound old fiscal quarters the same
   way they bound old calendar ones.
+
+## Verification fix (Nov 4, 2026 — after the first live
+## verification FAILED)
+
+The first live verification (NVDA, earningsbrief.pages.dev)
+showed the picker but every fiscal click fell back to the
+latest quarter with "Unrecognized quarter label", and no
+consensus. Diagnosis, in order:
+
+1. The frontend HAD shipped (fiscal buttons rendered), and
+   the Scout HAD received the fiscal label (it quoted it in
+   the note) — so the deployed Scout Worker was serving
+   pre-Batch-20 code. The local repo and proof copies were
+   both already fixed and identical; the Workers Build for
+   the Batch 20 scout commit had not produced a live
+   deployment. The re-upload below doubles as the fresh
+   build that unsticks it (same remedy as the Nov 2 Critic
+   stale-serving incident: a never-built commit).
+2. A real code gap Batch 20 missed: `mesh/scout_async.py`
+   — the cloud path — hand-mirrors the consensus guard
+   with an EXACT-date comparison (`cons_end !=
+   requested_end`) while the sync guard went
+   month-granular. Its module docstring claimed quarter
+   logic is imported so fixes land in both paths at once;
+   that was false for this guard. Fixed to
+   `_same_fiscal_month` (imported from scout.py), docstring
+   corrected, and a regression test added
+   (`test_async_fiscal_quarter_keeps_month_granularity_consensus`:
+   April row "Apr/2026" → month-end 2026-04-30 vs actual
+   end 2026-04-26 must be kept). Without this fix, the
+   April briefing would still have lost its consensus even
+   after the redeploy.
+3. A second frontend gap in the same class: the page-load
+   auto-run pre-filtered `?quarter=` to calendar labels
+   only, so a shared fiscal link (or a reload) dropped the
+   quarter and restored the latest briefing. Fixed by
+   passing the parameter through and letting
+   `getBriefing`'s own validation (which accepts fiscal
+   labels) decide.
+
+Open after this fix (observed, not part of it): the live
+NVDA picker showed Apr/Oct/Jul 2025 but no Jan 2026, though
+the picker logic itself is correct (distinct fact periods <
+current, newest first). The likely cause is a facts gap, not
+a picker bug: on the cloud path facts are EDGAR-only, and
+NVDA's Jan-2026 (Q4 FY2026) row depends on the derived-Q4
+reconstruction from the 10-K. To confirm on re-verification
+by inspecting the latest briefing's fact periods; if Jan
+2026 is still absent, it is a separate EDGAR-derivation
+follow-up, not a quarter-switching failure.
