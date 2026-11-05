@@ -1306,8 +1306,19 @@ function showCacheBanner(ticker, cached, quarter) {
     + `<button type="button" class="btn-secondary" id="cache-refresh">Refresh for latest data</button>`;
   banner.querySelector("#cache-refresh").addEventListener("click", () => {
     try {
-      localStorage.removeItem(cacheKey(ticker, quarter));
-      if (!quarter) localStorage.removeItem(legacyCacheKey(ticker));
+      // Refresh must clear EVERY key for the ticker: a briefing
+      // can live under LATEST, the legacy key, and an explicit
+      // quarter key, and leaving any one behind lets an older
+      // briefing resurface after the refresh (seen live Nov 5,
+      // 2026: takeaways changed 4 → 3 across reloads of the same
+      // chip because an older entry survived).
+      const prefix = `ame_briefing_${ticker}_`;
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && (k.startsWith(prefix) || k === legacyCacheKey(ticker))) keys.push(k);
+      }
+      keys.forEach((k) => localStorage.removeItem(k));
     } catch {}
     hideCacheBanner();
     getBriefing(ticker, quarter);
@@ -1743,13 +1754,20 @@ function renderCompareResults(matches) {
 // the same "reported vs forecast" parse as the EPS chart, so the
 // badge can never disagree with the chart. Hidden when no
 // consensus claim exists; the title carries the two numbers.
-function renderBeatMissBadge() {
+// The badge reads the claims of the briefing being rendered,
+// passed in explicitly — never module state. (A cached NVDA
+// briefing showed MSFT's EPS figures live on Nov 5, 2026: the
+// badge had read lastAnalystClaims, which a previous view had
+// left behind. Deriving from the briefing kills that whole class
+// of staleness.) Hiding also clears the text and tooltip, so a
+// stale "Reported … vs consensus …" can never resurface.
+function renderBeatMissBadge(claims) {
   const el = $("b-beatmiss");
   if (!el) return;
-  const parsed = (lastAnalystClaims || []).map(parseClaim);
+  const parsed = (claims || []).map(parseClaim);
   const eps = parsed.find((p) => /consensus/i.test(p.metric));
   const m = eps && eps.detail ? eps.detail.match(/\$?([\d.]+)\s*vs\s*\$?([\d.]+)/) : null;
-  if (!m) { show(el, false); return; }
+  if (!m) { el.textContent = ""; el.title = ""; show(el, false); return; }
   const reported = Number(m[1]), forecast = Number(m[2]);
   let text, cls;
   if (reported > forecast) { text = "▲ EPS beat"; cls = "badge-beat"; }
@@ -1963,7 +1981,9 @@ function fundsCardHtml(f) {
     parts.push("<ul class=\"list\">" + pos.map((p) => `<li>${esc(p.label)} — ${esc(p.holders)} holders, ${esc(p.shares)} shares</li>`).join("") + "</ul>");
   }
   if ((f.top || []).length) {
-    parts.push("<p class=\"body-text\">Largest holders as listed:</p><ul class=\"list\">" + f.top.map((h) => `<li>${esc(h.owner)} — ${esc(h.shares)} shares (${esc(h.change_pct || "—")}%) as of ${esc(h.date)}</li>`).join("") + "</ul>");
+    // Nasdaq's change_pct already carries a "%" ("2.273%") — strip
+    // it before appending ours, or the row reads "2.273%%".
+    parts.push("<p class=\"body-text\">Largest holders as listed:</p><ul class=\"list\">" + f.top.map((h) => `<li>${esc(h.owner)} — ${esc(h.shares)} shares (${esc(String(h.change_pct ?? "—").replace(/%$/, ""))}%) as of ${esc(h.date)}</li>`).join("") + "</ul>");
   }
   return parts.join("");
 }
@@ -1971,7 +1991,14 @@ function fundsCardHtml(f) {
 function politiciansCardHtml(rows) {
   if (!rows || !rows.length) return "";
   const items = rows.slice(0, 10).map((r) => {
-    const who = `${r.name} (${r.party}${r.chamber ? `, ${r.chamber}` : ""}${r.state ? ` ${r.state}` : ""})`;
+    // Join only the parts present, keeping the "house TX" shape:
+    // an executive-branch row has no party, so "(, executive)"
+    // must never render.
+    const bits = [];
+    if (r.party) bits.push(r.party);
+    if (r.chamber) bits.push(r.state ? `${r.chamber} ${r.state}` : r.chamber);
+    else if (r.state) bits.push(r.state);
+    const who = `${r.name} (${bits.join(", ")})`;
     const type = r.type ? r.type.charAt(0).toUpperCase() + r.type.slice(1) : "";
     return `<li>${esc(who)} — ${esc(type)} ${esc(r.range)}${r.date ? `, traded ${esc(r.date)}` : ""}${r.filed ? `, filed ${esc(r.filed)}` : ""}</li>`;
   }).join("");
@@ -2127,6 +2154,106 @@ async function renderHistory(ticker) {
   }
 }
 
+// [PHASE2-PURE:trendTableRows]
+// Aligns three history series by period_end (newest first, max 8
+// rows): revenue, EPS, operating margin (operating income / revenue
+// for the same period only), QoQ revenue change vs the previous
+// quarter. A missing quarter is null ("—" on render), never
+// interpolated or carried forward. QoQ needs the prior quarter in
+// the revenue series to be consecutive (70–110 days earlier); a
+// gap yields null.
+function trendTableRows(revSeries, epsSeries, opincSeries) {
+  const byEnd = (series) => {
+    const m = new Map();
+    (series || []).forEach((p) => {
+      if (p && p.period_end && typeof p.value === "number" && Number.isFinite(p.value)) m.set(p.period_end, p.value);
+    });
+    return m;
+  };
+  const rev = byEnd(revSeries), eps = byEnd(epsSeries), op = byEnd(opincSeries);
+  const ends = [...new Set([...rev.keys(), ...eps.keys(), ...op.keys()])].sort().reverse().slice(0, 8);
+  const revSorted = [...rev.keys()].sort();
+  return ends.map((end) => {
+    const r = rev.get(end), e = eps.get(end), o = op.get(end);
+    let qoq = null;
+    if (r !== undefined) {
+      const i = revSorted.indexOf(end);
+      if (i > 0) {
+        const prevEnd = revSorted[i - 1];
+        const gapDays = (new Date(end) - new Date(prevEnd)) / 86400000;
+        const prev = rev.get(prevEnd);
+        if (prev !== undefined && prev !== 0 && gapDays >= 70 && gapDays <= 110) {
+          qoq = (r - prev) / Math.abs(prev) * 100;
+        }
+      }
+    }
+    return { period_end: end,
+             revenue: r === undefined ? null : r,
+             eps: e === undefined ? null : e,
+             margin: (r !== undefined && o !== undefined && r !== 0) ? (o / r) * 100 : null,
+             qoq };
+  });
+}
+// [/PHASE2-PURE]
+
+function quarterShortLabel(iso) {
+  const m = /^(\d{4})-(\d{2})-\d{2}$/.exec(String(iso || ""));
+  if (!m) return iso || "";
+  return `${SHORT_MONTHS[Number(m[2]) - 1]} ${m[1]}`;
+}
+
+// Feature 12: recent filings card — fire-and-forget like
+// ownership; renders when its fetch returns, stays hidden if the
+// fetch fails or returns nothing usable.
+async function renderFilings(ticker) {
+  const sec = $("sec-filings");
+  if (!sec || !ticker || !lastBriefing || lastBriefing.ticker !== ticker) return;
+  show(sec, false);
+  try {
+    const resp = await fetch(`${ORCHESTRATOR_URL}/filings?ticker=${encodeURIComponent(ticker)}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!data || data.error || !data.filings) return;
+    if (!lastBriefing || lastBriefing.ticker !== ticker) return; // stale
+    const all = [...(data.filings["10-K"] || []), ...(data.filings["10-Q"] || []), ...(data.filings["8-K"] || [])]
+      .sort((a, b) => String(b.filingDate || "").localeCompare(String(a.filingDate || "")));
+    if (!all.length) return;
+    setHTML($("b-filings"), all.map((f) =>
+      `<li><strong>${esc(f.form)}</strong> · report ${esc(f.reportDate || "—")} · filed ${esc(f.filingDate || "—")} — <a href="${esc(f.url)}" target="_blank" rel="noopener">Open filing</a></li>`).join(""));
+    show(sec, true);
+  } catch { /* hide on failure */ }
+}
+
+// Feature 13: quarter trend table — three history series in
+// parallel, aligned by period end. The whole card hides if any
+// fetch fails; a metric missing for a quarter shows "—".
+async function renderTrendTable(ticker) {
+  const sec = $("sec-trend-table");
+  if (!sec || !ticker || !lastBriefing || lastBriefing.ticker !== ticker) return;
+  show(sec, false);
+  const fetchHist = async (m) => {
+    try {
+      const r = await fetch(`${ORCHESTRATOR_URL}/history?ticker=${encodeURIComponent(ticker)}&metric=${encodeURIComponent(m)}`);
+      return r.ok ? r.json() : null;
+    } catch { return null; }
+  };
+  const [rev, eps, op] = await Promise.all([
+    fetchHist("total_revenue"), fetchHist("gaap_eps"), fetchHist("operating_income"),
+  ]);
+  if (!lastBriefing || lastBriefing.ticker !== ticker) return; // stale
+  if (!rev || !eps || !op) return;
+  const rows = trendTableRows(rev.series, eps.series, op.series);
+  if (!rows.length) return;
+  const fmtEps = (v) => (v == null ? "—" : `$${v.toFixed(2)}`);
+  const fmtMargin = (v) => (v == null ? "—" : `${v.toFixed(1)}%`);
+  setHTML($("b-trend-table"),
+    `<thead><tr><th>Quarter</th><th>Revenue</th><th>EPS</th><th>Operating margin</th><th>QoQ revenue</th></tr></thead><tbody>` +
+    rows.map((r) =>
+      `<tr><td>Q ended ${esc(quarterShortLabel(r.period_end))}</td><td>${esc(fmtMoney(r.revenue))}</td><td>${esc(fmtEps(r.eps))}</td><td>${esc(fmtMargin(r.margin))}</td><td>${esc(fmtPct(r.qoq))}</td></tr>`).join("") +
+    `</tbody>`);
+  show(sec, true);
+}
+
 async function renderUnitEconomics(baseTicker, secondTicker) {
   const box = $("comparison-units");
   if (!box) return;
@@ -2194,7 +2321,7 @@ function render(b) {
   lastAnalystClaims = briefingClaims;
   renderAnalyst("briefing", briefingClaims, $("b-table"), "", lastScoutFacts, { ticker: b.ticker, quarter: b.quarter_label });
   updateAllCharts(b.quarter_label);
-  renderBeatMissBadge();
+  renderBeatMissBadge(briefingClaims);
   // The checked line belongs to a fresh run only: render() also
   // serves cache restores, where no check happened this visit,
   // so it starts hidden here and the run's completion site
@@ -2209,6 +2336,8 @@ function render(b) {
   setHTML($("b-diagram"), b.diagram ? diagramSvg(b.diagram) : "");
   renderOwnership(b.ticker);
   renderHistory(b.ticker);
+  renderFilings(b.ticker);
+  renderTrendTable(b.ticker);
   show($("sec-market"), Boolean(b.market_reaction));
   setText($("b-reaction"), b.market_reaction || "");
   setHTML($("b-story"), storyHtml(b.story || ""));
