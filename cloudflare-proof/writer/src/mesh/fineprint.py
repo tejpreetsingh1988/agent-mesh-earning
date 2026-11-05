@@ -44,41 +44,141 @@ KEYWORD_RE = re.compile(
     re.IGNORECASE)
 
 MDA_RE = re.compile(r"management's discussion and analysis", re.IGNORECASE)
+MDA_ITEM_RE = re.compile(
+    r"item\s+2\.?\s+management's discussion and analysis", re.IGNORECASE)
 NOTES_RE = re.compile(
     r"notes to (condensed )?consolidated financial statements|"
     r"notes to financial statements", re.IGNORECASE)
-ITEM_RE = re.compile(r"^item\s+\d+[a-z]?\b", re.IGNORECASE)
+NOTES_ITEM_RE = re.compile(
+    r"item\s+(\d+)[a-z]?\.?\s+notes to", re.IGNORECASE)
+ITEM_RE = re.compile(r"item\s+(\d+)[a-z]?\b", re.IGNORECASE)
 NUMBER_RE = re.compile(r"\d[\d,]*\.?\d*")
+TOKEN_RE = re.compile(r"[a-z0-9]{4,}")
 
 
 def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").lower()).strip()
 
 
+def _is_continued(text: str, m) -> bool:
+    """True when a heading match is a "(Continued)" page header
+    inside the section, not the section's own heading."""
+    return "(continued)" in text[m.end():m.end() + 15].lower()
+
+
+def _is_toc_entry(text: str, m) -> bool:
+    """True when a heading match sits in the table of contents:
+    another "Item N" heading follows within 200 chars (TOC
+    entries are densely packed; a real heading is followed by
+    body text for thousands of chars)."""
+    return ITEM_RE.search(text, m.end(), m.end() + 200) is not None
+
+
+def _item_matches(text: str) -> list[tuple[int, int]]:
+    """(offset, number) of every "Item N" heading-ish match."""
+    return [(m.start(), int(m.group(1))) for m in ITEM_RE.finditer(text or "")]
+
+
+def _section_end(text: str, start: int, item_no: int | None) -> int:
+    """Offset where a section ends: the next "Item N" match whose
+    number is greater than the section's own item number (so a
+    cross-reference like "see Item 1A" inside Item 2 MD&A does
+    not end it early), else the end of the text. Capped at
+    SECTION_CAP chars from the start."""
+    cap = min(len(text), start + SECTION_CAP)
+    if item_no is None:
+        for off, _num in _item_matches(text):
+            if off > start:
+                return min(off, cap)
+        return cap
+    for off, num in _item_matches(text):
+        if off > start and num > item_no:
+            return min(off, cap)
+    return cap
+
+
 def extract_sections(text: str) -> dict:
-    """MD&A + footnotes from a stripped 10-Q, each capped. A
-    heading starts its section; the next top-level ITEM heading
-    ends it. A missing heading yields an empty section (the
-    diff just uses what's found) — filers vary too much to
-    fail on it."""
+    """MD&A + footnotes from a stripped 10-Q, each capped.
+
+    Works on newline-free text (strip_html collapses the whole
+    filing to one line — proven Nov 5, 2026: the old line-based
+    scan matched both headings on line 0 and returned the first
+    60k chars of XBRL header junk for BOTH sections). Headings
+    are found by character offset instead:
+    - MD&A: the LAST "Item 2. Management's Discussion..." match
+      (the table of contents carries the same phrase first; the
+      real heading follows it). Fallback: last bare-phrase match.
+    - Notes: the LAST "Item N. Notes to..." match when the
+      filer numbers it, else the last bare-phrase match before
+      the MD&A start, skipping "See accompanying Notes..."
+      footer references. The notes live inside Item 1, so their
+      section ends at the next Item 2+ heading.
+    A missing heading yields an empty section (the diff just
+    uses what's found) — filers vary too much to fail on it."""
     out = {"mda": "", "notes": ""}
     if not text:
         return out
-    lines = text.splitlines()
-    starts = {}
-    for i, line in enumerate(lines):
-        s = line.strip()
-        if "mda" not in starts and MDA_RE.search(s):
-            starts["mda"] = i
-        if "notes" not in starts and NOTES_RE.search(s):
-            starts["notes"] = i
-    for key, start in starts.items():
-        end = len(lines)
-        for j in range(start + 1, len(lines)):
-            if ITEM_RE.match(lines[j].strip()):
-                end = j
+    # --- MD&A ---
+    mda_start = None
+    mda_no = None
+    mda_item = list(MDA_ITEM_RE.finditer(text))
+    if mda_item:
+        mda_start = mda_item[-1].start()
+        mda_no = 2
+    else:
+        mda_bare = [m for m in MDA_RE.finditer(text) if not _is_continued(text, m)]
+        if mda_bare:
+            mda_start = mda_bare[-1].start()
+            # MD&A is Item 2 of Part I in a 10-Q by structure;
+            # do not infer it from the last "Item N" match, which
+            # is a table-of-contents entry (same TOC trap as the
+            # notes branch below).
+            mda_no = 2
+    if mda_start is not None:
+        out["mda"] = text[mda_start:_section_end(text, mda_start, mda_no)]
+    # --- Notes ---
+    notes_start = None
+    notes_no = None
+    notes_item = list(NOTES_ITEM_RE.finditer(text))
+    if notes_item:
+        m = notes_item[-1]
+        notes_start = m.start()
+        notes_no = int(m.group(1))
+    else:
+        limit = mda_start if mda_start is not None else len(text)
+        for m in NOTES_RE.finditer(text):
+            if m.start() >= limit:
                 break
-        out[key] = "\n".join(lines[start:end])[:SECTION_CAP]
+            # Skip "See accompanying Notes..." footer references
+            # inside the financial statements, "(Continued)" page
+            # headers inside the notes, and table-of-contents
+            # entries — then take the FIRST remaining match: the
+            # real heading. (The LAST match would be a page
+            # header near the end of the notes, leaving a
+            # 380-char stub — proven on the real NVDA 10-Q.)
+            if "see accompanying" in text[max(0, m.start() - 40):m.start()].lower():
+                continue
+            if _is_continued(text, m) or _is_toc_entry(text, m):
+                continue
+            notes_start = m.start()
+            break
+        if notes_start is not None:
+            # Bare notes headings live inside Item 1 (Financial
+            # Statements), so the section ends at Item 2 — which
+            # is the MD&A start when MD&A was found. Do NOT infer
+            # the enclosing item from the last "Item N" match
+            # before the heading: the table of contents puts
+            # Item 1–4 matches ahead of it (proven by the
+            # failing test — the TOC's Item 4 made the notes run
+            # to the end of the document).
+            if mda_start is not None and mda_start > notes_start:
+                out["notes"] = text[notes_start:min(
+                    mda_start, notes_start + SECTION_CAP)]
+            else:
+                out["notes"] = text[notes_start:_section_end(text, notes_start, 1)]
+            return out
+    if notes_start is not None:
+        out["notes"] = text[notes_start:_section_end(text, notes_start, notes_no)]
     return out
 
 
@@ -97,18 +197,47 @@ def split_paragraphs(text: str) -> list[str]:
     return paras
 
 
+def _tokens(normed: str) -> set[str]:
+    """Distinctive tokens of a normalized sentence: words of 4+
+    letters/digits. Short words carry no signal and are dropped."""
+    return set(TOKEN_RE.findall(normed))
+
+
 def diff_paragraphs(cur: list[str], prev: list[str]) -> tuple[list[str], list[str]]:
     """(new, changed) vs last quarter's sentences. Exact
     normalized match = unchanged; a close match (difflib >= 0.8)
-    = changed; anything else = new."""
+    = changed; anything else = new.
+
+    Speed (Nov 5, 2026 — the old version killed the Writer):
+    the naive version ran difflib.get_close_matches against
+    EVERY previous sentence for every unmatched current one —
+    ~1,000,000 SequenceMatcher ratios for a real 10-Q pair,
+    ~1.7s of CPU against the Worker's 2,000ms budget (the whole
+    /tasks/send died at exactly 2,010ms). Now an inverted index
+    on distinctive tokens narrows each sentence to at most 5
+    candidates by shared-token count, and difflib runs only on
+    those — same 0.8 cutoff, ~100x fewer ratios."""
     prev_norm = {_norm(p): p for p in prev}
     prev_norm_list = list(prev_norm)
+    index: dict[str, list[int]] = {}
+    for j, n in enumerate(prev_norm_list):
+        for tok in _tokens(n):
+            index.setdefault(tok, []).append(j)
     new, changed = [], []
     for p in cur:
         n = _norm(p)
         if n in prev_norm:
             continue
-        close = difflib.get_close_matches(n, prev_norm_list, n=1, cutoff=0.8)
+        scores: dict[int, int] = {}
+        for tok in _tokens(n):
+            for j in index.get(tok, ()):
+                scores[j] = scores.get(j, 0) + 1
+        if not scores:
+            new.append(p)
+            continue
+        best = sorted(scores, key=lambda j: (-scores[j], j))[:5]
+        close = difflib.get_close_matches(
+            n, [prev_norm_list[j] for j in best], n=1, cutoff=0.8)
         if close:
             changed.append(p)
         else:
