@@ -241,3 +241,66 @@ def test_fiscal_quarter_selects_fiscal_filing_and_truncates():
     assert pack.consensus["fiscal_quarter_ending"] == "Jul/2026"
     assert not any("could not confirm" in m.lower() for m in pack.missing)
     assert not any("not used for beat/miss" in m for m in pack.missing)
+
+
+# Batch 20 fix (Nov 4, 2026): the ASYNC Scout's consensus guard
+# was exact-date while the sync guard went month-granular, so
+# every fiscal quarter's consensus was discarded on the cloud
+# path (live NVDA runs showed "Consensus unavailable" notes and
+# no beat/miss). This mirrors the sync fiscal test through
+# collect_evidence_async: requested April quarter, Nasdaq row
+# "Apr/2026" (month-end 2026-04-30) vs actual end 2026-04-26 —
+# same fiscal month, so the consensus must survive.
+def _nvda_april_mcp_call(server, tool, args):
+    if server == "filings" and tool == "get_company_facts":
+        return {"ticker": "NVDA", "company_name": "NVIDIA Corporation", "cik": 1045810}
+    if server == "filings" and tool == "list_recent_filings":
+        return {"filings": [
+            {"form": "8-K", "filingDate": "2026-05-27", "accessionNumber": "nq1",
+             "primaryDocument": "d.htm", "reportDate": "2026-05-27"},
+            {"form": "8-K", "filingDate": "2026-02-25", "accessionNumber": "old",
+             "primaryDocument": "d.htm", "reportDate": "2026-02-25"},
+        ]}
+    if server == "filings" and tool == "get_filing_text":
+        return {}
+    if server == "filings" and tool == "get_filing_facts":
+        return {"facts": [
+            {"id": "edgar_rev_2026-04-26", "metric": "total_revenue", "value": 44.0,
+             "unit": "USD_B", "period": "2026-04-26", "source_tag": "Revenues", "form": "10-Q"},
+        ]}
+    if server == "market" and tool == "get_quarterly_history":
+        return {"quarters": [
+            {"period_end": "2025-04-27", "total_revenue": 26.0e9, "operating_income": 17.0e9},
+            {"period_end": "2026-04-26", "total_revenue": 44.0e9, "operating_income": 28.0e9},
+        ]}
+    if server == "market" and tool == "get_price_reaction":
+        return {}
+    if server == "filings" and tool == "get_transcript_excerpt":
+        return {"status": "unavailable"}
+    if server == "estimates_news" and tool == "get_consensus_estimates":
+        # Selection probes AND the Phase B call both use the
+        # selected filing's date (2026-05-27); one rule covers both.
+        if args.get("report_date") == "2026-05-27":
+            return {"status": "available", "fiscal_quarter_ending": "Apr/2026",
+                    "eps_estimate": 0.90, "eps_reported": 0.95, "num_estimates": 10}
+        return {"status": "unavailable", "reason": "no row"}
+    raise AssertionError(f"unexpected call {server}/{tool}")
+
+
+async def _nvda_april_mcp_call_async(server, tool, args):
+    return _nvda_april_mcp_call(server, tool, args)
+
+
+def test_async_fiscal_quarter_keeps_month_granularity_consensus():
+    pack = asyncio.run(collect_evidence_async(
+        "NVDA", _nvda_april_mcp_call_async, quarter="quarter ended 2026-04-26"))
+    assert pack.status == "REPORTED"
+    assert pack.quarter_label == "quarter ended 2026-04-26"
+    assert str(pack.quarter_end) == "2026-04-26"
+    assert pack.report_date.date().isoformat() == "2026-05-27"
+    assert all(f.period <= "2026-04-26" for f in pack.facts)
+    # The guard must NOT discard the April row: 2026-04-30 and
+    # 2026-04-26 are the same fiscal month.
+    assert pack.consensus is not None
+    assert pack.consensus["fiscal_quarter_ending"] == "Apr/2026"
+    assert not any("not used for beat/miss" in m for m in pack.missing)
