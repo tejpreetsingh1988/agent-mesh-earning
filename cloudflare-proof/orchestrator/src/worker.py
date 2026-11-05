@@ -55,7 +55,8 @@ async def _agent_call(agent: str, payload: dict) -> dict:
 
 
 def _scout_payload(ticker: str, quarter: str = "") -> dict:
-    """Scout agent payload. A requested quarter ("Q2 2026") rides
+    """Scout agent payload. A requested quarter ("Q2 2026", or a
+    fiscal label like "quarter ended 2026-07-26") rides
     along; empty means the most recent reported quarter."""
     payload = {"ticker": ticker}
     if quarter:
