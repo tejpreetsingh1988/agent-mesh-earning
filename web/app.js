@@ -35,6 +35,17 @@ function esc(s) {
 
 function show(el, on) { if (el) el.hidden = !on; }
 
+// Hotfix (Nov 4, 2026): the frontend ships in pieces — app.js can
+// carry section renderers whose HTML sections land in a later
+// upload (the held batches). A missing section must hide, never
+// throw: every direct innerHTML/textContent write in render() and
+// its section renderers goes through these two helpers, which
+// no-op on a missing element. Before this, one missing section
+// (b-takeaways) threw on every render and broke the whole site,
+// and the throw was misreported as a lost connection.
+function setHTML(el, html) { if (el) el.innerHTML = html; }
+function setText(el, text) { if (el) el.textContent = text; }
+
 function prettyMetric(m) {
   return String(m || "").replace(/_/g, " ").replace(/\b\w+/g, (w) => {
     const up = w.toUpperCase();
@@ -740,7 +751,10 @@ async function runStream(ticker, quarter = "", onBriefing = null, resumeRunId = 
           sawEvent = true;
           const ev = JSON.parse(line.slice(6));
           if (ev.event === "briefing") {
-            render(ev.briefing);
+            // A render failure is a display failure, not a lost
+            // connection: mark it so runStream's catch shows the
+            // real error instead of the connection-lost copy.
+            try { render(ev.briefing); } catch (e) { const err = new Error("Could not display the briefing: " + (e && e.message ? e.message : String(e))); err.isDisplayError = true; throw err; }
             saveBriefingCache(ev.briefing, quarter);
             renderRecentBriefings();
             if (onBriefing) onBriefing(ev.briefing);
@@ -779,6 +793,15 @@ async function runStream(ticker, quarter = "", onBriefing = null, resumeRunId = 
       }
     }
   } catch (e) {
+    // A display failure is not a lost connection: render() threw
+    // while drawing a briefing that fully arrived (hotfix Nov 4,
+    // 2026 — the missing-section throw). Show the real error and
+    // do not offer a resume, which would only reproduce it.
+    if (e && e.isDisplayError) {
+      stopElapsed();
+      showBriefingError(ticker, e.message, { retry: false });
+      return true;
+    }
     // Stream broke mid-run: this is a lost connection, NOT a job
     // failure. Batch 31: the run itself is dead (the server
     // cancels its pipeline task on disconnect), but its
@@ -935,7 +958,7 @@ async function getBriefing(ticker, quarter = "", onDone = null, resumeRunId = ""
   const cached = readBriefingCache(ticker, quarter);
   if (cached) {
     lastScoutFacts = cached.facts || [];
-    render(cached.briefing);
+    try { render(cached.briefing); } catch (e) { showBriefingError(ticker, "Could not display the saved briefing: " + (e && e.message ? e.message : String(e))); return; }
     show($("agents"), false);
     show($("log"), false);
     show($("error"), false);
@@ -1395,13 +1418,13 @@ function takeawaysFor(b) {
 function renderKpis(kpis, sourceUrl) {
   const items = Array.isArray(kpis) ? kpis : [];
   show($("sec-kpis"), items.length > 0);
-  $("b-kpis").innerHTML = items.map((k) => {
+  setHTML($("b-kpis"), items.map((k) => {
     const v = String(k.value ?? "");
     let shown = v;
     if (k.unit && /^[\d.,+-]+$/.test(v)) shown = v + (k.unit === "%" ? "%" : " " + k.unit);
     const label = `${esc(k.name || "")} — ${esc(shown)}${k.period ? " (" + esc(k.period) + ")" : ""}${k.kind === "outlook" ? " (Outlook)" : ""}`;
     return `<li>${label}</li>`;
-  }).join("");
+  }).join(""));
   const note = $("b-kpis-note");
   if (note) {
     note.innerHTML = sourceUrl
@@ -1417,10 +1440,10 @@ function renderFinePrint(items) {
   const sec = $("sec-fineprint");
   if (!sec) return;
   show(sec, !!(items && items.length));
-  $("b-fineprint").innerHTML = (items || []).map((it) => {
+  setHTML($("b-fineprint"), (items || []).map((it) => {
     const src = it.source_url ? ` <a href="${esc(it.source_url)}" target="_blank" rel="noopener">Source</a>` : "";
     return `<li>“${esc(it.quote)}” — ${esc(it.why_it_matters)} <span class="meta">(${esc(it.section)})${src}</span></li>`;
-  }).join("");
+  }).join(""));
 }
 
 // Business-model diagram (Batch 23): a deterministic SVG from a
@@ -1570,16 +1593,16 @@ async function renderOwnership(ticker) {
   const sec = $("ownership");
   if (!sec || !ticker) return;
   const apply = (data) => {
-    $("ownership-title").textContent = `Who's trading ${ticker}`;
+    setText($("ownership-title"), `Who's trading ${ticker}`);
     const ins = insiderCardHtml(data.insiders);
     const fun = fundsCardHtml(data.funds);
     const pol = politiciansCardHtml(data.politicians);
     show($("own-insiders-card"), !!ins);
-    $("own-insiders").innerHTML = ins;
+    setHTML($("own-insiders"), ins);
     show($("own-funds-card"), !!fun);
-    $("own-funds").innerHTML = fun;
+    setHTML($("own-funds"), fun);
     show($("own-politicians-card"), !!pol);
-    $("own-politicians").innerHTML = pol;
+    setHTML($("own-politicians"), pol);
     show(sec, !!(ins || fun || pol));
   };
   if (ownershipCache[ticker]) { apply(ownershipCache[ticker]); return; }
@@ -1745,17 +1768,17 @@ async function renderUnitEconomics(baseTicker, secondTicker) {
 function render(b) {
   lastBriefing = b;
   renderQuarterPicker(b.quarter_label);
-  $("b-ticker").textContent = b.ticker;
-  $("b-logo").innerHTML = logoImg(b.ticker, "logo-img logo-header");
-  $("b-quarter").textContent = b.quarter_label;
-  $("b-verdict").textContent = b.verdict;
+  setText($("b-ticker"), b.ticker);
+  setHTML($("b-logo"), logoImg(b.ticker, "logo-img logo-header"));
+  setText($("b-quarter"), b.quarter_label);
+  setText($("b-verdict"), b.verdict);
   // Takeaways (Batch 29): derived only from this briefing's own
   // verified claims and drivers — no new model call, no new cost.
   // Unlike the checked line, these need no fresh run: a cache
   // restore recomputes the same bullets from the stored briefing.
   const takeaways = takeawaysFor(b);
   show($("sec-takeaways"), takeaways.length > 0);
-  $("b-takeaways").innerHTML = takeaways.map((t) => `<li>${esc(t)}</li>`).join("");
+  setHTML($("b-takeaways"), takeaways.map((t) => `<li>${esc(t)}</li>`).join(""));
   // Claim values are percentages; the raw float (8.868501529051978)
   // is an internal artifact, so round to the one decimal the claim
   // text itself uses. Derivations drop their "from facts …" suffix:
@@ -1777,23 +1800,23 @@ function render(b) {
   show($("b-checked"), false);
   const drivers = b.drivers || [];
   show($("sec-drivers"), drivers.length > 0);
-  $("b-drivers").innerHTML = drivers.map((d) => `<li>${esc(d)}</li>`).join("");
+  setHTML($("b-drivers"), drivers.map((d) => `<li>${esc(d)}</li>`).join(""));
   renderKpis(b.kpis, b.kpi_source_url);
   renderFinePrint(b.fine_print);
   show($("sec-diagram"), !!b.diagram);
-  $("b-diagram").innerHTML = b.diagram ? diagramSvg(b.diagram) : "";
+  setHTML($("b-diagram"), b.diagram ? diagramSvg(b.diagram) : "");
   renderOwnership(b.ticker);
   renderHistory(b.ticker);
   show($("sec-market"), Boolean(b.market_reaction));
-  $("b-reaction").textContent = b.market_reaction || "";
-  $("b-story").innerHTML = storyHtml(b.story || "");
-  $("b-model").textContent = b.story_model || "—";
-  $("b-sources").innerHTML = (b.sources || []).map((s) => {
+  setText($("b-reaction"), b.market_reaction || "");
+  setHTML($("b-story"), storyHtml(b.story || ""));
+  setText($("b-model"), b.story_model || "—");
+  setHTML($("b-sources"), (b.sources || []).map((s) => {
     const label = esc(s.publisher || "Source");
     return s.url ? `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${label}</a></li>`
                  : `<li>${label}</li>`;
-  }).join("");
-  $("b-trace").textContent = b.trace_id || "—";
+  }).join(""));
+  setText($("b-trace"), b.trace_id || "—");
   // The Analyst copies pack.missing into risks, so tool notes (the
   // absent price feed, in the cloud build) arrive inside
   // guidance_and_watch. They are honest data notes, not guidance,
@@ -1802,9 +1825,9 @@ function render(b) {
   const watch = (b.guidance_and_watch || []).filter((w) => !isNote(w));
   const notes = (b.guidance_and_watch || []).filter(isNote);
   show($("sec-watch"), watch.length > 0);
-  $("b-watch").innerHTML = watch.map((w) => `<li>${esc(w)}</li>`).join("");
+  setHTML($("b-watch"), watch.map((w) => `<li>${esc(w)}</li>`).join(""));
   show($("sec-notes"), notes.length > 0);
-  $("b-notes").innerHTML = notes.map((w) => `<li>${esc(w)}</li>`).join("");
+  setHTML($("b-notes"), notes.map((w) => `<li>${esc(w)}</li>`).join(""));
   show($("briefing"), true);
 }
 
