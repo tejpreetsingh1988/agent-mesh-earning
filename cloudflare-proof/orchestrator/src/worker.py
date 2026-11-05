@@ -33,6 +33,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from mesh.agent_app import create_app
 from mesh.auth import auth_headers
+from mesh.filings import fetch_recent_filings_async
 from mesh.history import history_for_ticker
 from mesh.orchestrator_async import error_event, run_briefing_async
 from mesh.ownership import fetch_ownership_async
@@ -218,6 +219,15 @@ async def ownership(ticker: str = ""):
         return await fetch_ownership_async(ticker)
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.get("/filings")
+async def filings(ticker: str = ""):
+    """Recent filings card (Feature 12): newest 1x 10-K, 3x 10-Q,
+    5x 8-K from the SEC submissions feed — metadata + links only,
+    computed in mesh/filings.py. A failed fetch returns an error
+    payload and the frontend hides the card."""
+    return await fetch_recent_filings_async(ticker)
 
 
 @app.get("/history")
