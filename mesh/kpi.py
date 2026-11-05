@@ -395,25 +395,54 @@ def _settle_reply(text: str, release_text: str, allow_empty: bool = True):
     return False, None
 
 
-async def extract_kpis_async(release_text: str, llm_call=None, ai=None, api_key: str = ""):
+async def extract_kpis_async(release_text: str, llm_call=None, ai=None, api_key: str = "",
+                             debug: dict | None = None):
     """One extraction call down the story chain (Workers AI, then
     gateway models, then direct OpenRouter), returning
     (kpi items, diagram-or-None). No deterministic fallback: no
-    KPIs and no diagram is a valid, hiding result."""
+    KPIs and no diagram is a valid, hiding result. debug (optional
+    dict, filled in place, Batch 38): {replies, settled_on,
+    last_parse_ok, last_reply_head} — the chain was returning 0
+    with no visibility into whether the fetch, the models, or the
+    settle rule was responsible."""
     system, user = kpi_prompt(release_text)
     # Batch 36: allow_empty turns on only from the SECOND model
     # that returns successfully — a single empty verdict never
     # ends the chain. `replies` counts successful returns only:
     # a timeout or provider error does not count as an opinion.
     replies = 0
+    last_text = ""
+    last_ok = False
+
+    def _note(text):
+        nonlocal last_text, last_ok
+        last_text = text or ""
+        last_ok = parse_kpi_response(last_text)[2]
+        if debug is not None:
+            debug["replies"] = replies
+            debug["last_parse_ok"] = last_ok
+            debug["last_reply_head"] = last_text[:200]
+
+    def _finish(out):
+        if debug is not None:
+            valid, diagram = out
+            if valid:
+                debug["settled_on"] = "items"
+            elif diagram is not None:
+                debug["settled_on"] = "diagram"
+            else:
+                debug["settled_on"] = "empty"
+        return out
+
     if ai is not None:
         try:
             result = await asyncio.wait_for(call_workers_ai(ai, WORKERS_AI_MODEL, system, user),
                                             timeout=WORKERS_AI_TIMEOUT_S)
             replies += 1
-            settled, out = _settle_reply((result or {}).get("text", ""), release_text, allow_empty=replies > 1)
+            _note((result or {}).get("text", ""))
+            settled, out = _settle_reply(last_text, release_text, allow_empty=replies > 1)
             if settled:
-                return out
+                return _finish(out)
         except Exception:
             pass
         for model in MODELS:
@@ -421,23 +450,31 @@ async def extract_kpis_async(release_text: str, llm_call=None, ai=None, api_key:
                 result = await asyncio.wait_for(call_gateway_binding(ai, model, system, user),
                                                 timeout=GATEWAY_TIMEOUT_S)
                 replies += 1
-                settled, out = _settle_reply((result or {}).get("text", ""), release_text, allow_empty=replies > 1)
+                _note((result or {}).get("text", ""))
+                settled, out = _settle_reply(last_text, release_text, allow_empty=replies > 1)
                 if settled:
-                    return out
+                    return _finish(out)
             except Exception:
                 continue
     if llm_call is None and not api_key:
+        if debug is not None:
+            debug["settled_on"] = "no_key"
+            debug["replies"] = replies
         return [], None
     caller = llm_call or (lambda model, s, u: _call_openrouter_async(model, s, u, api_key))
     for model in MODELS:
         try:
             result = await asyncio.wait_for(caller(model, system, user), timeout=60)
             replies += 1
-            settled, out = _settle_reply((result or {}).get("text", ""), release_text, allow_empty=replies > 1)
+            _note((result or {}).get("text", ""))
+            settled, out = _settle_reply(last_text, release_text, allow_empty=replies > 1)
             if settled:
-                return out
+                return _finish(out)
         except Exception:
             continue
+    if debug is not None:
+        debug["settled_on"] = "exhausted"
+        debug["replies"] = replies
     return [], None
 
 
@@ -458,10 +495,15 @@ async def _call_openrouter_async(model: str, system: str, user: str, api_key: st
     return {"text": text, "model": model}
 
 
-def extract_kpis_sync(release_text: str, llm_call=None, api_key: str = ""):
+def extract_kpis_sync(release_text: str, llm_call=None, api_key: str = "",
+                      debug: dict | None = None):
     """Sync twin (Docker path): direct OpenRouter chain only,
-    returning (kpi items, diagram-or-None)."""
+    returning (kpi items, diagram-or-None). debug: same Batch 38
+    telemetry dict as the async twin, filled in place."""
     if llm_call is None and not api_key:
+        if debug is not None:
+            debug["settled_on"] = "no_key"
+            debug["replies"] = 0
         return [], None
     system, user = kpi_prompt(release_text)
     caller = llm_call or (lambda model, s, u: _call_openrouter(model, s, u, api_key))
@@ -473,37 +515,64 @@ def extract_kpis_sync(release_text: str, llm_call=None, api_key: str = ""):
         try:
             result = caller(model, system, user)
             replies += 1
-            settled, out = _settle_reply((result or {}).get("text", ""), release_text, allow_empty=replies > 1)
+            text = (result or {}).get("text", "") or ""
+            if debug is not None:
+                debug["replies"] = replies
+                debug["last_parse_ok"] = parse_kpi_response(text)[2]
+                debug["last_reply_head"] = text[:200]
+            settled, out = _settle_reply(text, release_text, allow_empty=replies > 1)
             if settled:
+                if debug is not None:
+                    valid, diagram = out
+                    debug["settled_on"] = "items" if valid else ("diagram" if diagram is not None else "empty")
                 return out
         except Exception:
             continue
+    if debug is not None:
+        debug["settled_on"] = "exhausted"
+        debug["replies"] = replies
     return [], None
 
 
 async def kpis_for_pack_async(ticker: str, quarter_end_iso: str, llm_call=None,
-                              ai=None, api_key: str = ""):
+                              ai=None, api_key: str = "", debug: dict | None = None):
     """Best-effort end-to-end async KPI step: (items, diagram,
     source_url). Any failure — no 8-K, no exhibit, no key, every
     model failing — yields ([], None, ""), never an exception, so
-    the briefing stands."""
+    the briefing stands. debug (optional dict, Batch 38) records
+    the fetch outcome and the extraction telemetry."""
     try:
         text, url = await fetch_release_text_async(ticker, quarter_end_iso)
+        if debug is not None:
+            debug["fetched_chars"] = len(text or "")
+            debug["fetched_url"] = url or ""
         if not text:
+            if debug is not None:
+                debug["settled_on"] = "no_text"
             return [], None, ""
-        items, diagram = await extract_kpis_async(text, llm_call=llm_call, ai=ai, api_key=api_key)
+        items, diagram = await extract_kpis_async(text, llm_call=llm_call, ai=ai, api_key=api_key, debug=debug)
         return items, diagram, url if (items or diagram is not None) else ""
     except Exception:
+        if debug is not None:
+            debug["settled_on"] = "error"
         return [], None, ""
 
 
-def kpis_for_pack_sync(ticker: str, quarter_end_iso: str, llm_call=None, api_key: str = ""):
+def kpis_for_pack_sync(ticker: str, quarter_end_iso: str, llm_call=None, api_key: str = "",
+                       debug: dict | None = None):
     """Best-effort sync twin."""
     try:
         text, url = fetch_release_text_sync(ticker, quarter_end_iso)
+        if debug is not None:
+            debug["fetched_chars"] = len(text or "")
+            debug["fetched_url"] = url or ""
         if not text:
+            if debug is not None:
+                debug["settled_on"] = "no_text"
             return [], None, ""
-        items, diagram = extract_kpis_sync(text, llm_call=llm_call, api_key=api_key)
+        items, diagram = extract_kpis_sync(text, llm_call=llm_call, api_key=api_key, debug=debug)
         return items, diagram, url if (items or diagram is not None) else ""
     except Exception:
+        if debug is not None:
+            debug["settled_on"] = "error"
         return [], None, ""

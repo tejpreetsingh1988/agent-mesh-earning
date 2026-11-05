@@ -80,12 +80,16 @@ async def run_story_step_async(pack, analysis, api_key: str = "", ai=None):
 
 async def run_kpi_step_async(pack, api_key: str = "", ai=None):
     """The KPI + diagram step alone, as a kpi_result dict.
-    Never raises — a failure returns the hiding result."""
+    Never raises — a failure returns the hiding result. The
+    Batch 38 debug dict rides along (dropped by write_briefing;
+    visible on the direct mode call) so a 0 can be diagnosed."""
+    debug: dict = {}
     items, diagram, url = await _with_deadline(
         kpis_for_pack_async(pack.ticker, pack.quarter_end.isoformat(),
-                            ai=ai, api_key=api_key),
+                            ai=ai, api_key=api_key, debug=debug),
         ([], None, ""))
-    return {"items": items, "diagram": diagram, "source_url": url}
+    debug.setdefault("settled_on", "incomplete")
+    return {"items": items, "diagram": diagram, "source_url": url, "debug": debug}
 
 
 async def run_fineprint_step_async(pack, api_key: str = "", ai=None):
