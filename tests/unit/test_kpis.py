@@ -65,6 +65,16 @@ def test_parse_kpi_json():
     assert kpi.parse_kpi_json("") == []
 
 
+def test_parse_kpi_response_repairs_trailing_comma():
+    # Batch 36: a trailing comma before } or ] is the one repair
+    # that is unambiguous — small models emit it often.
+    assert kpi.parse_kpi_json('{"kpis": [{"name": "a", "value": "1",}],}') == [{"name": "a", "value": "1"}]
+    assert kpi.parse_kpi_json('{"kpis": [{"name": "a", "value": "1"},], "diagram": null,}') == [{"name": "a", "value": "1"}]
+    # Anything else garbled still fails cleanly.
+    assert kpi.parse_kpi_json('{"kpis": [{"name": "a", "value": "1"') == []
+    assert kpi.parse_kpi_json('{"kpis": [{"name": \'a\', "value": "1"}]}') == []
+
+
 def test_pick_earnings_8k():
     recent = {"form": ["10-Q", "8-K", "8-K", "8-K"],
               "filingDate": ["2026-10-01", "2026-10-29", "2026-11-04", "2026-12-20"],
@@ -134,7 +144,10 @@ def test_extract_kpis_async_drops_invented(monkeypatch):
     assert len(calls) == 1
 
 
-def test_extract_kpis_async_empty_list_stops_chain(monkeypatch):
+def test_extract_kpis_async_empty_list_needs_second_opinion(monkeypatch):
+    # Batch 36: a single empty verdict no longer ends the chain —
+    # the first model's {"kpis": []} is not settled, the second
+    # model's empty reply is.
     monkeypatch.setattr(kpi, "MODELS", ["m1", "m2"])
     calls = []
 
@@ -143,7 +156,44 @@ def test_extract_kpis_async_empty_list_stops_chain(monkeypatch):
         return {"text": '{"kpis": []}'}
 
     assert asyncio.run(kpi.extract_kpis_async("release text", llm_call=fake_llm)) == ([], None)
-    assert calls == ["m1"]
+    assert calls == ["m1", "m2"]
+
+
+def test_extract_kpis_async_first_empty_then_valid(monkeypatch):
+    # Batch 36: the chain continues past a first-model empty and
+    # returns the second model's KPIs.
+    monkeypatch.setattr(kpi, "MODELS", ["m1", "m2"])
+    calls = []
+
+    async def fake_llm(model, system, user):
+        calls.append(model)
+        if model == "m1":
+            return {"text": '{"kpis": []}'}
+        return {"text": '{"kpis": ['
+                '{"name": "Company-operated same shop sales", "value": "5.4%", "unit": "%", "period": "Q3 2026", "kind": "metric"}]}'}
+
+    text = "Company-operated same shop sales increased 5.4%."
+    items, diagram = asyncio.run(kpi.extract_kpis_async(text, llm_call=fake_llm))
+    assert [o["name"] for o in items] == ["Company-operated same shop sales"]
+    assert calls == ["m1", "m2"]
+
+
+def test_extract_kpis_sync_first_empty_then_valid(monkeypatch):
+    # Batch 36, sync twin: same rule as the async chain.
+    monkeypatch.setattr(kpi, "MODELS", ["m1", "m2"])
+    calls = []
+
+    def fake_llm(model, system, user):
+        calls.append(model)
+        if model == "m1":
+            return {"text": '{"kpis": []}'}
+        return {"text": '{"kpis": ['
+                '{"name": "Company-operated same shop sales", "value": "5.4%", "unit": "%", "period": "Q3 2026", "kind": "metric"}]}'}
+
+    text = "Company-operated same shop sales increased 5.4%."
+    items, diagram = kpi.extract_kpis_sync(text, llm_call=fake_llm)
+    assert [o["name"] for o in items] == ["Company-operated same shop sales"]
+    assert calls == ["m1", "m2"]
 
 
 def test_extract_kpis_async_all_models_fail(monkeypatch):
