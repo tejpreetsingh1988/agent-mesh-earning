@@ -410,3 +410,16 @@ def test_extract_kpis_sync_split_draws_diagram(monkeypatch):
     assert [o["name"] for o in items] == ["Company-operated same shop sales"]
     assert diagram is not None and len(diagram["nodes"]) == 2
     assert seen == [("kpis", "m1"), ("diagram", "m1")]
+
+
+def test_kpi_prompt_window_is_6000_chars():
+    # Batch 41: the KPI window was cut from 20,000 to 6,000 chars —
+    # the 20k input timed out on Workers AI even after the Batch 40
+    # split, and 6k matches the story prompt's proven input size.
+    assert kpi.RELEASE_TEXT_CAP == 6000
+    early = "Company-operated same shop sales increased 5.4%. "
+    late = "Shop count reached 1,000. "
+    text = early + "x" * 7000 + late
+    _system, user = kpi.kpi_prompt(text)
+    assert "5.4%" in user
+    assert "1,000" not in user
