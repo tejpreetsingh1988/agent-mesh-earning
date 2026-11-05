@@ -21,7 +21,8 @@ from .schemas import Analysis, Briefing, EvidencePack, SourceRef
 
 
 def write_briefing(pack: EvidencePack, analysis: Analysis, trace_id: str,
-                   story_result: dict | None = None) -> Briefing:
+                   story_result: dict | None = None, kpi_result: dict | None = None,
+                   fine_print_result: dict | None = None) -> Briefing:
     table = [{"claim": c.text, "value": c.value, "derivation": c.derivation} for c in analysis.claims]
     price_claims = [c.text for c in analysis.claims if c.text.startswith("Regular-session close change")]
     market_reaction = price_claims[0] if price_claims else ""
@@ -40,8 +41,10 @@ def write_briefing(pack: EvidencePack, analysis: Analysis, trace_id: str,
             sources.append(SourceRef(url="", publisher=str(cons["source"]), retrieved_at=pack.report_date))
     tr = pack.transcript or {}
     transcript_url = ""
+    transcript_excerpt = ""
     if isinstance(tr, dict) and tr.get("status") == "available" and tr.get("url"):
         transcript_url = str(tr["url"])
+        transcript_excerpt = str(tr.get("excerpt", "") or "")
         key = (transcript_url, str(tr.get("source", "Transcript")))
         if key not in seen:
             sources.append(SourceRef(url=transcript_url, publisher=str(tr.get("source", "Transcript")),
@@ -62,4 +65,10 @@ def write_briefing(pack: EvidencePack, analysis: Analysis, trace_id: str,
         story_tokens_out=story_result.get("tokens_out"),
         story_latency_s=story_result.get("latency_s"),
         transcript_url=transcript_url,
+        transcript_excerpt=transcript_excerpt,
+        quarter_end=pack.quarter_end.isoformat() if pack.quarter_end else "",
+        fine_print=(fine_print_result or {}).get("items", []) if isinstance(fine_print_result, dict) else [],
+        kpis=(kpi_result or {}).get("items", []) if isinstance(kpi_result, dict) else [],
+        kpi_source_url=(kpi_result or {}).get("source_url", "") if isinstance(kpi_result, dict) else "",
+        diagram=(kpi_result or {}).get("diagram") if isinstance(kpi_result, dict) else None,
     )
