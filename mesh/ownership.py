@@ -26,10 +26,15 @@ carry their Form 4 derivation label.
 import asyncio
 import re
 
-from .edgar import UA as EDGAR_UA
 from .worker_http import fetch_json as _afetch_json
 
-NASDAQ_HEADERS = {"Accept": "application/json", "User-Agent": EDGAR_UA}
+# Nasdaq's company endpoints hang a non-browser User-Agent (proven
+# Nov 5, 2026: the EDGAR UA request hung 2+ minutes from the VM
+# while the identical request with this UA answered in seconds, and
+# the Worker-side /ownership route returned nulls for both cards).
+# Same browser UA as mesh/history.py and mesh/async_tools.py.
+NASDAQ_HEADERS = {"Accept": "application/json",
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 TICKER_RE = re.compile(r"^[A-Z]{1,5}$")
 
 
