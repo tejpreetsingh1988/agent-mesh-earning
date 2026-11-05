@@ -68,7 +68,7 @@ function quarterLabel(period) {
 }
 
 function pivotFacts(facts) {
-  const order = ["total_revenue", "operating_income", "gaap_eps"];
+  const order = ["total_revenue", "operating_income", "net_income", "ebitda", "gaap_eps"];
   const groups = new Map();
   for (const f of facts || []) {
     const metric = f.metric || "unknown";
@@ -308,7 +308,8 @@ let trendMetric = "total_revenue";
 function updateTrendChart() {
   const tables = pivotFacts(lastScoutFacts);
   const table = tables.find((t) => t.metric === trendMetric);
-  const label = trendMetric === "operating_income" ? "Operating income" : "Revenue";
+  const label = { total_revenue: "Revenue", operating_income: "Operating income",
+    net_income: "Net income", ebitda: "EBITDA" }[trendMetric] || "Revenue";
   if (!table || !table.periods.length) {
     destroyChart("trend"); setChartEmpty("trend", true);
     const note = $("chart-trend-empty");
@@ -565,6 +566,13 @@ function issueText(issue) {
 
 function onStreamEvent(ev, ticker) {
   const name = ev.event;
+  // Batch 31: the run's id, carried by the first event. The
+  // retry button after a break resumes this run instead of
+  // restarting it; a fresh run's run_started overwrites it.
+  if (name === "run_started") {
+    lastRunId = ev.run_id || "";
+    return;
+  }
   if (name === "scout_started") {
     setConductor("Now: Scout — fetching filings", "Step 1 of 4 · Next: Analyst · Usually 30–90s");
     setStatus("scout", "working", "");
@@ -709,9 +717,10 @@ function showBriefingError(ticker, message, opts = {}) {
 // Returns true when the stream spoke (briefing rendered or an
 // error event shown) and false when it failed before any event,
 // which is the only case that falls back to POST.
-async function runStream(ticker, quarter = "", onBriefing = null) {
+async function runStream(ticker, quarter = "", onBriefing = null, resumeRunId = "") {
   const q = quarter ? `&quarter=${encodeURIComponent(quarter)}` : "";
-  const resp = await fetch(`${ORCHESTRATOR_URL}/tasks/stream?ticker=${encodeURIComponent(ticker)}${q}`);
+  const r = resumeRunId ? `&resume_run_id=${encodeURIComponent(resumeRunId)}` : "";
+  const resp = await fetch(`${ORCHESTRATOR_URL}/tasks/stream?ticker=${encodeURIComponent(ticker)}${q}${r}`);
   if (!resp.ok || !resp.body) return false;
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
@@ -746,6 +755,14 @@ async function runStream(ticker, quarter = "", onBriefing = null) {
           }
           if (ev.event === "error") {
             stopElapsed();
+            // Batch 31: the run id is unknown (never started, or
+            // its log is gone) — fall back to a fresh run once,
+            // instead of showing a dead end. The fresh call has
+            // no resume id, so this cannot loop.
+            if (ev.code === "unknown_run" && resumeRunId) {
+              lastRunId = "";
+              return runStream(ticker, quarter, onBriefing);
+            }
             if (ev.verdict === "FAIL") {
               showCriticFail(ticker, ev.issues || []);
             } else {
@@ -763,19 +780,21 @@ async function runStream(ticker, quarter = "", onBriefing = null) {
     }
   } catch (e) {
     // Stream broke mid-run: this is a lost connection, NOT a job
-    // failure. The ledger stays frozen (the working step keeps its
-    // Working state, the rail keeps its baton) and the banner says
-    // so, with a Run again button. No duplicate POST: the run may
-    // still be completing server-side, and a fresh run is the
-    // user's explicit choice, not an automatic retry.
+    // failure. Batch 31: the run itself is dead (the server
+    // cancels its pipeline task on disconnect), but its
+    // checkpoint survives — the ledger stays frozen and the
+    // button resumes from the last finished stage instead of
+    // restarting. No duplicate POST and no automatic retry: the
+    // resume is the user's explicit choice.
     if (sawEvent) {
       stopElapsed();
       // Frozen, not failed: the working step pauses (its dot stops
       // pulsing, because only [data-state="working"] animates).
       if (workingAgent) setStatus(workingAgent, "paused", "");
-      setConductor("Connection lost — live stream stopped", "The run may still be completing on the server · Ledger frozen, not failed");
+      setConductor("Connection lost — live stream stopped", "Run frozen at its last checkpoint · Resume continues from there");
       const strip = $("conductor-strip");
       if (strip) strip.classList.add("is-alert");
+      setRetryLabel();
       showBriefingError(ticker, `Live log stopped mid-run: ${e.message}`, { retry: true });
       return true;
     }
@@ -786,9 +805,10 @@ async function runStream(ticker, quarter = "", onBriefing = null) {
   if (sawEvent) {
     stopElapsed();
     if (workingAgent) setStatus(workingAgent, "paused", "");
-    setConductor("Connection lost — live stream ended early", "The run may still be completing on the server · Ledger frozen, not failed");
+    setConductor("Connection lost — live stream ended early", "Run frozen at its last checkpoint · Resume continues from there");
     const strip = $("conductor-strip");
     if (strip) strip.classList.add("is-alert");
+    setRetryLabel();
     showBriefingError(ticker, "Live log ended before the briefing arrived", { retry: true });
     return true;
   }
@@ -819,6 +839,16 @@ async function runPost(ticker, quarter = "", onBriefing = null) {
 // suggestion click that starts the run.
 let currentTicker = "";
 let currentQuarter = "";
+
+// Batch 31: the in-flight (or just-broken) stream's run id,
+// set by its run_started event. The retry button after a break
+// resumes this run; a fresh run clears it first, so a later
+// break never resumes a stale run.
+let lastRunId = "";
+function setRetryLabel() {
+  const retry = $("error-retry");
+  if (retry) retry.textContent = lastRunId ? "Resume run" : "Run again";
+}
 
 // Repeat-briefing cache: a completed briefing (plus the Scout
 // facts its charts need) is saved per ticker in localStorage.
@@ -878,11 +908,14 @@ function setQuarterButtonsDisabled(disabled) {
   document.querySelectorAll("#quarter-picker button").forEach((b) => { b.disabled = disabled; });
 }
 
-async function getBriefing(ticker, quarter = "", onDone = null) {
+async function getBriefing(ticker, quarter = "", onDone = null, resumeRunId = "") {
   ticker = String(ticker || "").trim().toUpperCase();
   quarter = String(quarter || "").trim();
   if (!/^Q[1-4] \d{4}$/.test(quarter) && !/^quarter ended \d{4}-\d{2}-\d{2}$/.test(quarter)) quarter = "";
   if (!ticker || running) return;
+  // A fresh run clears any broken run's id (a resume keeps it,
+  // so a second break resumes the same run again).
+  if (!resumeRunId) lastRunId = "";
   // A new run replaces any comparison view; a compare run
   // rebuilds it through onDone after its briefing renders.
   show($("comparison"), false);
@@ -927,12 +960,18 @@ async function getBriefing(ticker, quarter = "", onDone = null) {
   // Optimistic plan, rendered in the same tick as the click: the
   // full 4-step plan is visible before the first stream event
   // arrives, with an honest time range instead of a point estimate.
-  setConductor("Starting — Scout is first", "Step 1 of 4 · Next: Analyst · Usually 30–90s");
+  // A resume replays the stored events into the same rail, so its
+  // plan line says resuming, not starting.
+  if (resumeRunId) {
+    setConductor("Resuming run — replaying completed steps", "Finished stages replay instantly · Only the remaining stages run live");
+  } else {
+    setConductor("Starting — Scout is first", "Step 1 of 4 · Next: Analyst · Usually 30–90s");
+  }
   startElapsed();
   try {
     let streamed;
     try {
-      streamed = await runStream(ticker, quarter, onDone);
+      streamed = await runStream(ticker, quarter, onDone, resumeRunId);
     } catch (e) {
       streamed = false;
     }
@@ -972,13 +1011,16 @@ $("log-download").addEventListener("click", () => {
   URL.revokeObjectURL(a.href);
 });
 
-// "Run again" after a lost connection: an explicit fresh run.
-// It is only ever shown for connection losses, never for a
-// server verdict (FAIL / NOT_REPORTED_YET would just repeat).
+// "Resume run" / "Run again" after a lost connection (Batch 31).
+// With a run id held, the click resumes that run from its last
+// checkpoint; without one (the break hit before run_started),
+// it is an explicit fresh run. Only ever shown for connection
+// losses, never for a server verdict (FAIL / NOT_REPORTED_YET
+// would just repeat).
 $("error-retry").addEventListener("click", () => {
   if (running || !currentTicker) return;
   show($("error"), false);
-  getBriefing(currentTicker, currentQuarter);
+  getBriefing(currentTicker, currentQuarter, null, lastRunId);
 });
 
 let lastBriefing = null;
@@ -1022,6 +1064,31 @@ function briefingMarkdown(b) {
     lines.push("## What drove the quarter");
     b.drivers.forEach((d) => lines.push(`- ${d}`));
     lines.push("");
+  }
+  if ((b.kpis || []).length) {
+    lines.push("## Company metrics");
+    b.kpis.forEach((k) => {
+      const v = String(k.value ?? "");
+      const shown = (k.unit && /^[\d.,+-]+$/.test(v)) ? v + (k.unit === "%" ? "%" : " " + k.unit) : v;
+      lines.push(`- ${k.name || ""} — ${shown}${k.period ? ` (${k.period})` : ""}${k.kind === "outlook" ? " (Outlook)" : ""}`);
+    });
+    lines.push("From the company's earnings release (exhibit 99.1). Release-extracted, not Critic-verified." + (b.kpi_source_url ? ` Source: ${b.kpi_source_url}` : ""), "");
+  }
+  if ((b.fine_print || []).length) {
+    lines.push("## Fine print — what's new in the filings");
+    b.fine_print.forEach((it) => {
+      lines.push(`- “${it.quote}” — ${it.why_it_matters} (${it.section})${it.source_url ? ` Source: ${it.source_url}` : ""}`);
+    });
+    lines.push("LLM-surfaced from this quarter's and last quarter's 10-Q filings and the earnings release. Not Critic-verified; quotes and numbers are verbatim from the filings.", "");
+  }
+  if (b.diagram && (b.diagram.edges || []).length) {
+    lines.push("## How it makes money");
+    const names = {};
+    (b.diagram.nodes || []).forEach((n) => { names[n.id] = n.label; });
+    b.diagram.edges.forEach((e) => {
+      lines.push(`- ${names[e.from] || e.from} —${e.kind}→ ${names[e.to] || e.to}${e.label ? ` (${e.label})` : ""}`);
+    });
+    lines.push("Simplified model — illustrative, from the company's earnings release.", "");
   }
   if (b.market_reaction) {
     lines.push("## Market reaction", b.market_reaction, "");
@@ -1194,7 +1261,10 @@ function renderComparison(base, second) {
   $("comparison-headline").innerHTML = compareTableHtml(base.ticker, second.ticker, headlineRows);
   $("comparison-table").innerHTML = compareTableHtml(
     base.ticker, second.ticker, alignClaims(base.table, second.table));
+  const ub = $("comparison-units");
+  if (ub) { ub.innerHTML = ""; show(ub, false); }
   show(sec, true);
+  renderUnitEconomics(base.ticker, second.ticker);
 }
 
 function startCompare(secondTicker) {
@@ -1288,6 +1358,390 @@ function setCheckedLine(totalSeconds) {
   show(el, true);
 }
 
+// Takeaways (Batch 29): a pure selection from the briefing's own
+// verified claims and drivers — the biggest YoY growth move, the
+// operating margin, EPS vs consensus, and the top driver, in that
+// order, skipping whatever is absent. Claim texts are reused
+// verbatim (they are already complete sentences with their
+// periods and values); nothing is reworded, so no new number can
+// enter through this box. YoY only for the growth pick: QoQ is
+// the same metric measured twice and would double-count it.
+function takeawaysFor(b) {
+  const rows = (b.table || []).map((r) => ({
+    text: String(r.claim ?? r.text ?? ""), value: r.value,
+  }));
+  const out = [];
+  const push = (t) => { if (t && !out.includes(t)) out.push(t); };
+  const yoy = rows.filter((r) => /YoY growth/.test(r.text) && Number.isFinite(r.value));
+  if (yoy.length) {
+    yoy.sort((a, b2) => Math.abs(b2.value) - Math.abs(a.value));
+    push(yoy[0].text);
+  }
+  const margin = rows.find((r) => /^Operating margin/.test(r.text));
+  if (margin) push(margin.text);
+  const eps = rows.find((r) => /^EPS vs consensus/.test(r.text));
+  if (eps) push(eps.text);
+  const drivers = b.drivers || [];
+  if (drivers.length) push(String(drivers[0]));
+  return out.slice(0, 4);
+}
+
+// Company metrics (Batch 22): release-extracted KPIs, rendered
+// from the briefing object. The unit appends only to a bare
+// numeric value ("48" + "shops"); a value that already carries
+// its unit ("5.4%", "$549.8 million") is shown as-is, so the
+// line never reads "5.4% %". The section note always states the
+// provenance: release-extracted, never Critic-verified.
+function renderKpis(kpis, sourceUrl) {
+  const items = Array.isArray(kpis) ? kpis : [];
+  show($("sec-kpis"), items.length > 0);
+  $("b-kpis").innerHTML = items.map((k) => {
+    const v = String(k.value ?? "");
+    let shown = v;
+    if (k.unit && /^[\d.,+-]+$/.test(v)) shown = v + (k.unit === "%" ? "%" : " " + k.unit);
+    const label = `${esc(k.name || "")} — ${esc(shown)}${k.period ? " (" + esc(k.period) + ")" : ""}${k.kind === "outlook" ? " (Outlook)" : ""}`;
+    return `<li>${label}</li>`;
+  }).join("");
+  const note = $("b-kpis-note");
+  if (note) {
+    note.innerHTML = sourceUrl
+      ? `From the company's earnings release (<a href="${esc(sourceUrl)}" target="_blank" rel="noopener">exhibit 99.1</a>). Release-extracted, not Critic-verified.`
+      : "From the company's earnings release (exhibit 99.1). Release-extracted, not Critic-verified.";
+  }
+}
+
+// Fine print (Batch 30): LLM-surfaced new/changed filing
+// passages. The section renders only when the briefing carries
+// items; each item links its own source filing.
+function renderFinePrint(items) {
+  const sec = $("sec-fineprint");
+  if (!sec) return;
+  show(sec, !!(items && items.length));
+  $("b-fineprint").innerHTML = (items || []).map((it) => {
+    const src = it.source_url ? ` <a href="${esc(it.source_url)}" target="_blank" rel="noopener">Source</a>` : "";
+    return `<li>“${esc(it.quote)}” — ${esc(it.why_it_matters)} <span class="meta">(${esc(it.section)})${src}</span></li>`;
+  }).join("");
+}
+
+// Business-model diagram (Batch 23): a deterministic SVG from a
+// validated spec — no AI images, no generated prose. Layout is
+// fixed by role: payers and partners share the left column
+// (supply side, partners below payers), the company sits center,
+// users sit right. Money edges are solid green, value edges
+// dashed zinc; return edges (right-to-left, e.g. attention
+// flowing back) bow underneath, same-column edges bow left so
+// they never cross a node label. Colors come from CSS variables
+// so the diagram follows light/dark mode with no re-render.
+// The spec's icon field is ignored: the role fixes the glyph.
+function diagramSvg(spec) {
+  if (!spec || !Array.isArray(spec.nodes) || !spec.nodes.length) return "";
+  const COL = { payer: 110, partner: 110, company: 300, user: 490 };
+  const ICONS = {
+    payer: '<circle r="7"/><path d="M0 -7 V7"/>',
+    user: '<circle cy="-4" r="3.5"/><path d="M-7 7 A7 5 0 0 1 7 7"/>',
+    company: '<path d="M-7 8 V-8 H7 V8 M-7 0 H7"/>',
+    partner: '<circle cx="-3.5" r="4.5"/><circle cx="3.5" r="4.5"/>',
+  };
+  const byCol = {};
+  spec.nodes.forEach((n) => { (byCol[n.role] = byCol[n.role] || []).push(n); });
+  // Partners stack below payers in the shared left column.
+  const left = [...(byCol.payer || []), ...(byCol.partner || [])];
+  const cols = { left, center: byCol.company || [], right: byCol.user || [] };
+  const maxN = Math.max(left.length, cols.center.length, cols.right.length, 1);
+  const H = 100 * maxN + 30;
+  const pos = {};
+  const place = (list, x) => list.forEach((n, i) => { pos[n.id] = { x, y: 60 + i * 100 }; });
+  place(left, COL.payer);
+  place(cols.center, COL.company);
+  place(cols.right, COL.user);
+  const nodeSvg = spec.nodes.map((n) => {
+    const p = pos[n.id];
+    if (!p) return "";
+    return `<g transform="translate(${p.x},${p.y})"><circle r="17" fill="var(--card)" stroke="var(--border)" stroke-width="1.5"/><g fill="none" stroke="var(--foreground)" stroke-width="1.8" stroke-linecap="round">${ICONS[n.role] || ""}</g><text y="34" text-anchor="middle" font-size="12.5" fill="var(--foreground)">${esc(n.label)}</text></g>`;
+  }).join("");
+  const edgeSvg = (spec.edges || []).map((e) => {
+    const a = pos[e.from], b = pos[e.to];
+    if (!a || !b) return "";
+    const money = e.kind === "money";
+    const color = money ? "var(--green)" : "var(--muted-foreground)";
+    const marker = money ? "url(#arr-money)" : "url(#arr-value)";
+    const dash = money ? "" : ' stroke-dasharray="6 5"';
+    let d, lx, ly;
+    if (a.x === b.x) {
+      // Same column: bow left, clear of the labels below nodes.
+      d = `M ${a.x - 17} ${a.y} Q ${a.x - 70} ${(a.y + b.y) / 2} ${b.x - 17} ${b.y}`;
+      lx = a.x - 52; ly = (a.y + b.y) / 2;
+    } else {
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const sx = a.x + (dx / len) * 24, sy = a.y + (dy / len) * 24;
+      const ex = b.x - (dx / len) * 24, ey = b.y - (dy / len) * 24;
+      const bow = dx > 0 ? -26 : 64;
+      const cx = (sx + ex) / 2, cy = (sy + ey) / 2 + bow;
+      d = `M ${sx} ${sy} Q ${cx} ${cy} ${ex} ${ey}`;
+      lx = 0.25 * sx + 0.5 * cx + 0.25 * ex;
+      ly = 0.25 * sy + 0.5 * cy + 0.25 * ey;
+    }
+    const label = e.label ? `<text x="${lx}" y="${ly}" text-anchor="middle" font-size="11" fill="var(--muted-foreground)" paint-order="stroke" stroke="var(--card)" stroke-width="4" stroke-linejoin="round">${esc(e.label)}</text>` : "";
+    return `<path d="${d}" fill="none" stroke="${color}" stroke-width="2" marker-end="${marker}"${dash}/>${label}`;
+  }).join("");
+  return `<svg viewBox="0 0 600 ${H}" width="100%" role="img" aria-label="Simplified business model diagram"><defs><marker id="arr-money" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto-start-reverse"><path d="M0 0 L7 3 L0 6 Z" style="fill:var(--green)"/></marker><marker id="arr-value" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto-start-reverse"><path d="M0 0 L7 3 L0 6 Z" style="fill:var(--muted-foreground)"/></marker></defs>${edgeSvg}${nodeSvg}</svg>`;
+}
+
+// Who's trading it (Batch 24): company-level activity, fetched
+// after the briefing renders — never through the Critic, never
+// interpreted. Nasdaq (no CORS headers) comes Worker-side via
+// the Orchestrator's /ownership route; Veridion (CORS *) comes
+// straight from the browser, so it counts against the visitor's
+// own IP on the free 60/hour tier. Each card hides on failure.
+// Results memoize per ticker per page load: ownership is
+// company-level, so a quarter change or cache restore reuses it.
+const VERIDION_URL = "https://www.veridionmarkets.com/api/v1/disclosures";
+const ownershipCache = {};
+
+function veridionRows(data, ticker) {
+  const rows = [];
+  for (const r of (data && data.data) || []) {
+    if (!r || !r.member || !r.asset) continue;
+    if (String(r.asset.ticker || "").toUpperCase() !== ticker) continue;
+    const amount = r.amount || {};
+    const range = amount.verbatim_text
+      || ((amount.range_low != null && amount.range_high != null)
+        ? `$${Number(amount.range_low).toLocaleString()} - $${Number(amount.range_high).toLocaleString()}` : "");
+    if (!range) continue;
+    // The API also returns a midpoint. It is never read here, so
+    // it cannot leak into a card: ranges only, as disclosed.
+    rows.push({
+      name: r.member.full_name || "", party: r.member.party || "",
+      chamber: r.member.chamber || "", state: r.member.state || "",
+      type: (r.transaction && r.transaction.type) || "",
+      date: (r.transaction && r.transaction.date) || "",
+      filed: (r.filing && r.filing.filed_date) || "",
+      range,
+    });
+  }
+  return rows;
+}
+
+function insiderCardHtml(ins) {
+  if (!ins) return "";
+  const parts = [];
+  if (ins.buys12 || ins.sells12) {
+    parts.push(`<p class="body-text">Open market buys: ${esc(ins.buys3 || "—")} in 3 months, ${esc(ins.buys12 || "—")} in 12 months. Sells: ${esc(ins.sells3 || "—")} in 3 months, ${esc(ins.sells12 || "—")} in 12 months.</p>`);
+  }
+  if (ins.net3 || ins.net12) {
+    parts.push(`<p class="body-text">Net share activity: ${esc(ins.net3 || "—")} in 3 months, ${esc(ins.net12 || "—")} in 12 months.</p>`);
+  }
+  if ((ins.recent || []).length) {
+    parts.push("<ul class=\"list\">" + ins.recent.map((t) => `<li>${esc(t.insider)} (${esc(t.relation)}) — ${esc(t.type)}, ${esc(t.shares)} shares @ ${esc(t.price)} on ${esc(t.date)}, holds ${esc(t.held)}</li>`).join("") + "</ul>");
+    if (ins.total_records) parts.push(`<p class="meta">${esc(String(ins.total_records))} insider transactions in the Nasdaq table.</p>`);
+  }
+  return parts.join("");
+}
+
+function fundsCardHtml(f) {
+  if (!f) return "";
+  const parts = [];
+  if (f.ownership_pct) {
+    parts.push(`<p class="body-text">Institutional ownership: ${esc(f.ownership_pct)} of ${esc(f.shares_outstanding || "—")} million shares outstanding.</p>`);
+  }
+  const pos = [...(f.positions || []), ...(f.new_sold_out || [])];
+  if (pos.length) {
+    parts.push("<ul class=\"list\">" + pos.map((p) => `<li>${esc(p.label)} — ${esc(p.holders)} holders, ${esc(p.shares)} shares</li>`).join("") + "</ul>");
+  }
+  if ((f.top || []).length) {
+    parts.push("<p class=\"body-text\">Largest holders as listed:</p><ul class=\"list\">" + f.top.map((h) => `<li>${esc(h.owner)} — ${esc(h.shares)} shares (${esc(h.change_pct || "—")}%) as of ${esc(h.date)}</li>`).join("") + "</ul>");
+  }
+  return parts.join("");
+}
+
+function politiciansCardHtml(rows) {
+  if (!rows || !rows.length) return "";
+  const items = rows.slice(0, 10).map((r) => {
+    const who = `${r.name} (${r.party}${r.chamber ? `, ${r.chamber}` : ""}${r.state ? ` ${r.state}` : ""})`;
+    const type = r.type ? r.type.charAt(0).toUpperCase() + r.type.slice(1) : "";
+    return `<li>${esc(who)} — ${esc(type)} ${esc(r.range)}${r.date ? `, traded ${esc(r.date)}` : ""}${r.filed ? `, filed ${esc(r.filed)}` : ""}</li>`;
+  }).join("");
+  const more = rows.length > 10 ? `<p class="meta">Showing the 10 most recent of ${rows.length} returned.</p>` : "";
+  return `<ul class="list">${items}</ul>${more}`;
+}
+
+async function renderOwnership(ticker) {
+  const sec = $("ownership");
+  if (!sec || !ticker) return;
+  const apply = (data) => {
+    $("ownership-title").textContent = `Who's trading ${ticker}`;
+    const ins = insiderCardHtml(data.insiders);
+    const fun = fundsCardHtml(data.funds);
+    const pol = politiciansCardHtml(data.politicians);
+    show($("own-insiders-card"), !!ins);
+    $("own-insiders").innerHTML = ins;
+    show($("own-funds-card"), !!fun);
+    $("own-funds").innerHTML = fun;
+    show($("own-politicians-card"), !!pol);
+    $("own-politicians").innerHTML = pol;
+    show(sec, !!(ins || fun || pol));
+  };
+  if (ownershipCache[ticker]) { apply(ownershipCache[ticker]); return; }
+  try {
+    const [nas, ver] = await Promise.allSettled([
+      fetch(`${ORCHESTRATOR_URL}/ownership?ticker=${encodeURIComponent(ticker)}`).then((r) => (r.ok ? r.json() : null)),
+      fetch(`${VERIDION_URL}?ticker=${encodeURIComponent(ticker)}&limit=25`, { headers: { Accept: "application/json" } }).then((r) => (r.ok ? r.json() : null)),
+    ]);
+    const data = {
+      insiders: nas.status === "fulfilled" && nas.value ? nas.value.insiders : null,
+      funds: nas.status === "fulfilled" && nas.value ? nas.value.funds : null,
+      politicians: ver.status === "fulfilled" && ver.value ? veridionRows(ver.value, ticker) : [],
+    };
+    ownershipCache[ticker] = data;
+    apply(data);
+  } catch { show(sec, false); }
+}
+
+// Fiscal.ai-style visuals (Batch 26): long-history charts from
+// the Orchestrator's /history route — computed server-side, never
+// LLM-written. The vs-chart and long bars follow the trend
+// switcher's metric; results memoize per ticker+metric.
+const HISTORY_LABELS = { total_revenue: "Revenue", operating_income: "Operating income",
+  net_income: "Net income", ebitda: "EBITDA", operating_cash_flow: "Operating cash flow",
+  free_cash_flow: "Free cash flow", buybacks: "Buybacks", shares_outstanding: "Shares outstanding" };
+const historyCache = {};
+
+function fmtPct(v) {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
+}
+function fmtMoney(v) {
+  if (v == null || !Number.isFinite(v)) return "—";
+  const abs = Math.abs(v);
+  if (abs >= 1e12) return `$${(v / 1e12).toFixed(2)}T`;
+  if (abs >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
+  if (abs >= 1e6) return `$${(v / 1e6).toFixed(1)}M`;
+  return `$${Math.round(v).toLocaleString()}`;
+}
+function cagrFromPct(totalPct, firstDate, lastDate) {
+  if (totalPct == null || !firstDate || !lastDate) return null;
+  const days = (new Date(lastDate) - new Date(firstDate)) / 86400000;
+  if (!(days > 0)) return null;
+  return (Math.pow(1 + totalPct / 100, 365.25 / days) - 1) * 100;
+}
+function isoShort(iso) {
+  const m = String(iso || "").match(/^(\d{4})-(\d{2})-\d{2}$/);
+  if (!m) return String(iso || "");
+  return `${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(m[2]) - 1]} ${m[1]}`;
+}
+function vsChartData(payload, metricLabel) {
+  const tr = payload && payload.total_return;
+  if (!tr || !tr.points || tr.points.length < 2 || !tr.metric_points || tr.metric_points.length < 2) return null;
+  const ends = tr.points.map((p) => p.period_end);
+  const labels = ends.map((e) => {
+    const p = (payload.series || []).find((s) => s.period_end === e);
+    return (p && p.label) || isoShort(e);
+  });
+  const metricTotal = tr.metric_points[tr.metric_points.length - 1].value_pct;
+  const metricCagr = cagrFromPct(metricTotal, ends[0], ends[ends.length - 1]);
+  return { labels,
+    datasets: [
+      { label: `Total return ${fmtPct(tr.total_change_pct)} (CAGR ${fmtPct(tr.cagr_pct)})`,
+        data: tr.points.map((p) => p.value_pct) },
+      { label: `${metricLabel} ${fmtPct(metricTotal)} (CAGR ${fmtPct(metricCagr)})`,
+        data: tr.metric_points.map((p) => p.value_pct) },
+    ] };
+}
+function longChartData(payload) {
+  const series = (payload && payload.series) || [];
+  if (series.length < 2) return null;
+  return { labels: series.map((p) => p.label || isoShort(p.period_end)),
+    data: series.map((p) => p.value) };
+}
+function readLineText(rl) {
+  if (!rl) return "";
+  const parts = [`Peak ${fmtMoney(rl.peak_value)} in ${isoShort(rl.peak_end)}`];
+  if (rl.current_vs_peak_pct != null) parts.push(`now ${fmtPct(rl.current_vs_peak_pct)} vs peak`);
+  parts.push(`longest rise ${rl.longest_rise_quarters} quarters, longest decline ${rl.longest_decline_quarters} quarters`);
+  if (rl.biggest_jump) {
+    parts.push(`biggest quarterly move ${fmtPct(rl.biggest_jump.pct)} (${isoShort(rl.biggest_jump.from_end)} → ${isoShort(rl.biggest_jump.to_end)})`);
+  }
+  return parts.join("; ") + ".";
+}
+
+async function renderHistory(ticker) {
+  if (!ticker || !lastBriefing || lastBriefing.ticker !== ticker) return;
+  const metric = trendMetric;
+  const key = `${ticker}:${metric}`;
+  const label = HISTORY_LABELS[metric] || "Revenue";
+  const vsTitle = $("chart-vs-metric");
+  if (vsTitle) vsTitle.textContent = label.toLowerCase();
+  const longTitle = $("chart-long-metric");
+  if (longTitle) longTitle.textContent = label.toLowerCase();
+  const apply = (payload) => {
+    if (!lastBriefing || lastBriefing.ticker !== ticker) return; // stale
+    const vs = vsChartData(payload, label);
+    if (vs) {
+      setChartEmpty("vs", false);
+      makeChart("vs", "line", vs.labels, [
+        { label: vs.datasets[0].label, data: vs.datasets[0].data,
+          borderColor: themeColor("#1d4ed8", "#60a5fa"), backgroundColor: "transparent", tension: 0.2, pointRadius: 0 },
+        { label: vs.datasets[1].label, data: vs.datasets[1].data,
+          borderColor: themeColor("#0f766e", "#2dd4bf"), backgroundColor: "transparent", tension: 0.2, pointRadius: 0 },
+      ]);
+    } else { destroyChart("vs"); setChartEmpty("vs", true); }
+    const lng = longChartData(payload);
+    if (lng) {
+      setChartEmpty("long", false);
+      makeChart("long", "bar", lng.labels, [{ label, data: lng.data,
+        backgroundColor: lng.labels.map((_, i) => i === lng.labels.length - 1 ? themeColor("#1d4ed8", "#60a5fa") : "#93c5fd"),
+        borderRadius: 6 }]);
+      const rl = $("chart-long-read");
+      if (rl) { const text = readLineText(payload.read_line); rl.textContent = text; show(rl, !!text); }
+    } else {
+      destroyChart("long"); setChartEmpty("long", true);
+      const rl = $("chart-long-read");
+      if (rl) show(rl, false);
+    }
+    setChartsVisible();
+  };
+  if (historyCache[key]) { apply(historyCache[key]); return; }
+  try {
+    const resp = await fetch(`${ORCHESTRATOR_URL}/history?ticker=${encodeURIComponent(ticker)}&metric=${encodeURIComponent(metric)}`);
+    if (!resp.ok) throw new Error(`history ${resp.status}`);
+    const payload = await resp.json();
+    historyCache[key] = payload;
+    apply(payload);
+  } catch {
+    destroyChart("vs"); destroyChart("long");
+    setChartEmpty("vs", true); setChartEmpty("long", true);
+  }
+}
+
+async function renderUnitEconomics(baseTicker, secondTicker) {
+  const box = $("comparison-units");
+  if (!box) return;
+  const fetchHist = async (t, m) => {
+    try {
+      const r = await fetch(`${ORCHESTRATOR_URL}/history?ticker=${encodeURIComponent(t)}&metric=${encodeURIComponent(m)}`);
+      return r.ok ? r.json() : null;
+    } catch { return null; }
+  };
+  const [revB, hcB, revS, hcS] = await Promise.all([
+    fetchHist(baseTicker, "total_revenue"), fetchHist(baseTicker, "headcount"),
+    fetchHist(secondTicker, "total_revenue"), fetchHist(secondTicker, "headcount"),
+  ]);
+  const perEmployee = (rev, hc) => {
+    const r = rev && rev.series && rev.series.length ? rev.series[rev.series.length - 1] : null;
+    const h = hc && hc.series && hc.series.length ? hc.series[hc.series.length - 1] : null;
+    if (!r || !h || !h.value) return null;
+    return { value: r.value / h.value, revLabel: r.label, revValue: r.value,
+      hcLabel: h.label, hcValue: h.value };
+  };
+  const b = perEmployee(revB, hcB), s = perEmployee(revS, hcS);
+  if (!b || !s) { show(box, false); box.innerHTML = ""; return; }
+  box.innerHTML = `<h4>Per unit</h4><p class="body-text">${esc(baseTicker)}: ${fmtMoney(b.value)} revenue per employee — ${fmtMoney(b.revValue)} revenue (${esc(b.revLabel)}) ÷ ${esc(Number(b.hcValue).toLocaleString())} employees (${esc(b.hcLabel)}).<br>`
+    + `${esc(secondTicker)}: ${fmtMoney(s.value)} revenue per employee — ${fmtMoney(s.revValue)} revenue (${esc(s.revLabel)}) ÷ ${esc(Number(s.hcValue).toLocaleString())} employees (${esc(s.hcLabel)}).</p>`
+    + `<p class="meta">Revenue is the latest quarterly XBRL figure; headcount is the latest DEI-tagged 10-K figure. The row hides when either input is missing for either company.</p>`;
+  show(box, true);
+}
+
 function render(b) {
   lastBriefing = b;
   renderQuarterPicker(b.quarter_label);
@@ -1295,6 +1749,13 @@ function render(b) {
   $("b-logo").innerHTML = logoImg(b.ticker, "logo-img logo-header");
   $("b-quarter").textContent = b.quarter_label;
   $("b-verdict").textContent = b.verdict;
+  // Takeaways (Batch 29): derived only from this briefing's own
+  // verified claims and drivers — no new model call, no new cost.
+  // Unlike the checked line, these need no fresh run: a cache
+  // restore recomputes the same bullets from the stored briefing.
+  const takeaways = takeawaysFor(b);
+  show($("sec-takeaways"), takeaways.length > 0);
+  $("b-takeaways").innerHTML = takeaways.map((t) => `<li>${esc(t)}</li>`).join("");
   // Claim values are percentages; the raw float (8.868501529051978)
   // is an internal artifact, so round to the one decimal the claim
   // text itself uses. Derivations drop their "from facts …" suffix:
@@ -1317,6 +1778,12 @@ function render(b) {
   const drivers = b.drivers || [];
   show($("sec-drivers"), drivers.length > 0);
   $("b-drivers").innerHTML = drivers.map((d) => `<li>${esc(d)}</li>`).join("");
+  renderKpis(b.kpis, b.kpi_source_url);
+  renderFinePrint(b.fine_print);
+  show($("sec-diagram"), !!b.diagram);
+  $("b-diagram").innerHTML = b.diagram ? diagramSvg(b.diagram) : "";
+  renderOwnership(b.ticker);
+  renderHistory(b.ticker);
   show($("sec-market"), Boolean(b.market_reaction));
   $("b-reaction").textContent = b.market_reaction || "";
   $("b-story").innerHTML = storyHtml(b.story || "");
@@ -1598,6 +2065,7 @@ document.querySelectorAll("[data-trend-metric]").forEach((btn) => {
     document.querySelectorAll("[data-trend-metric]").forEach((b) =>
       b.classList.toggle("is-active", b === btn));
     if (lastScoutFacts.length) updateTrendChart();
+    if (lastBriefing) renderHistory(lastBriefing.ticker);
   });
 });
 
@@ -1770,8 +2238,12 @@ try {
       const cs = $("compare-search");
       if (cs) cs.value = cParam.trim().toUpperCase();
     }
-    getBriefing(baseTicker,
-      qParam && /^Q[1-4] \d{4}$/.test(qParam.trim()) ? qParam.trim() : "");
+    // getBriefing validates the quarter itself (calendar "Qn YYYY"
+    // and fiscal "quarter ended YYYY-MM-DD" both pass); the load
+    // path must not pre-filter to calendar labels only, or a
+    // shared fiscal link reloads as the latest quarter instead
+    // of restoring its saved briefing (Batch 20 fix).
+    getBriefing(baseTicker, qParam ? qParam.trim() : "");
   }
 } catch { /* a bad share link never breaks the page */ }
 
