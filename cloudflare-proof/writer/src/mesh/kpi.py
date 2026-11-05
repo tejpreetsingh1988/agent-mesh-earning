@@ -46,7 +46,17 @@ from .worker_http import fetch_json as _afetch_json
 from .worker_http import fetch_text as _afetch_text
 
 EXHIBIT_991_RE = re.compile(r"ex(?:hibit)?[-_]?99[-_.]?1", re.I)
-RELEASE_TEXT_CAP = 20000
+# Batch 41: was 20,000. The Batch 40 split (KPIs alone, no diagram)
+# still timed out on Workers AI - output length was not the cause.
+# The remaining difference from the story prompt, which completes,
+# is input size: 20,000 chars (~5,000 tokens) of prefill. 6,000
+# chars puts the KPI prompt in the story prompt's input class. The
+# highlights bullets (same-shop sales, openings) sit in the first
+# ~2,000 chars of a typical release; later-window KPIs (shop counts,
+# AUV, ~14,000 chars in BROS) are lost by this cut - a thinner KPI
+# section is better than none, and a targeted second window is a
+# follow-up, not this batch.
+RELEASE_TEXT_CAP = 6000
 MAX_KPIS = 12
 EDGAR_HEADERS = {"User-Agent": EDGAR_UA}
 
