@@ -22,6 +22,7 @@ exact URL list. Clean /companies/<TICKER> URLs are listed, not
 the .html files (Pages redirects .html to clean and serves the
 same content there).
 """
+import html
 import json
 import sys
 from pathlib import Path
@@ -29,13 +30,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "web" / "companies" / "companies.json"
 
+# Canonical host for share/preview URLs (Feature 23). The sitemap
+# itself deliberately stays on the OLD host (see base below):
+# the AI Search instance crawls that host's sitemap, and
+# recreating the instance would reset its allowlist. robots.txt
+# may point at a sitemap on another host, so its Sitemap line
+# uses the canonical host while the sitemap file keeps the old
+# host's URLs.
+CANONICAL = "https://earningsbrief.pages.dev"
+
 PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{name} ({ticker}) — Earnings Ledger</title>
-<link rel="stylesheet" href="../styles.css">
+{og_tags}<link rel="stylesheet" href="../styles.css">
 </head>
 <body>
 <main class="container">
@@ -83,9 +93,26 @@ def main() -> int:
             print(f"skipping duplicate/empty ticker: {c!r}", file=sys.stderr)
             continue
         seen.add(ticker)
+        name = (c.get("name") or "").strip()
+        # Feature 23: OG tags carry identity only, never a result
+        # or verdict. A row with no name gets no OG tags rather
+        # than a broken title. Names are HTML-escaped in the
+        # attribute values (9 rows contain "&", e.g. JPMorgan
+        # Chase & Co.); the visible title/h1 keep their bytes.
+        og_tags = ""
+        if name:
+            esc = html.escape(name, quote=True)
+            og_tags = (
+                f'<meta property="og:title" content="{ticker} — {esc} | Earnings Ledger">\n'
+                f'<meta property="og:description" content="Verified earnings briefings for {esc} ({ticker}) — every number traces to an SEC filing.">\n'
+                f'<meta property="og:url" content="{CANONICAL}/companies/{ticker}.html">\n'
+                '<meta property="og:type" content="website">\n'
+                '<meta name="twitter:card" content="summary">\n'
+            )
         note = c.get("note", "").strip()
         note_line = f"  <p>{note}</p>\n" if note else ""
-        page = PAGE.format(name=c["name"], ticker=ticker, note_line=note_line)
+        page = PAGE.format(name=name or c.get("name", ""), ticker=ticker,
+                           og_tags=og_tags, note_line=note_line)
         (ROOT / "web" / "companies" / f"{ticker}.html").write_text(page)
     links = "\n".join(
         f'    <li><a href="{c["ticker"].strip().upper()}.html">'
@@ -107,9 +134,12 @@ def main() -> int:
                + "".join(f"  <url><loc>{u}</loc></url>\n" for u in urls)
                + "</urlset>\n")
     (ROOT / "web" / "sitemap.xml").write_text(sitemap)
+    # Feature 23: robots.txt points at the canonical host's
+    # sitemap; the sitemap file itself keeps the old host's URLs
+    # (the AI Search crawl source — see CANONICAL above).
     (ROOT / "web" / "robots.txt").write_text(
         "User-agent: *\nAllow: /\n\n"
-        f"Sitemap: {base}/sitemap.xml\n"
+        f"Sitemap: {CANONICAL}/sitemap.xml\n"
     )
     print(f"generated {len(seen)} company pages + index + sitemap ({len(urls)} urls)")
     return 0
