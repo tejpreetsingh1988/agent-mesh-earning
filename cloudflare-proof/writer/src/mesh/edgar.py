@@ -101,6 +101,14 @@ def list_recent_filings(ticker: str, limit: int = 10) -> dict:
 _EARNINGS_ITEM_RE = re.compile(r"item\s+2\.02", re.IGNORECASE)
 _MAX_EARNINGS_CANDIDATES = 6
 
+# Batch 65: a results 6-K furnishes its earnings release as
+# Exhibit 99.1 and says so in the shell ("Filed as Exhibit 99.1
+# ... is a press release ... announcing the Company's unaudited
+# consolidated financial results for the third quarter ended ...").
+# Both halves are required: other 6-Ks furnish non-earnings 99.1s.
+_RESULTS_6K_RE = re.compile(r"exhibit\s+99\.1", re.IGNORECASE)
+_RESULTS_6K_RESULTS_RE = re.compile(r"financial results", re.IGNORECASE)
+
 
 def _is_earnings_8k_text(clean_text: str) -> bool:
     """True when a cleaned 8-K head furnishes an earnings release.
@@ -112,6 +120,60 @@ def _is_earnings_8k_text(clean_text: str) -> bool:
     exhibit-99.1 check alone would miss them.
     """
     return bool(_EARNINGS_ITEM_RE.search(clean_text or ""))
+
+
+def _is_results_6k_text(clean_text: str) -> bool:
+    """True when a cleaned 6-K shell furnishes an earnings release
+    as Exhibit 99.1 (Batch 65)."""
+    text = clean_text or ""
+    return bool(_RESULTS_6K_RE.search(text) and _RESULTS_6K_RESULTS_RE.search(text))
+
+
+def _filing_index_items(cik: int, accession: str) -> list:
+    """Directory items of one filing's index.json (for exhibit
+    resolution)."""
+    url = (f"https://www.sec.gov/Archives/edgar/data/{cik}/"
+           f"{accession.replace('-', '')}/index.json")
+    try:
+        return (_get_json(url).get("directory", {}) or {}).get("item", []) or []
+    except Exception:
+        return []
+
+
+def _resolve_6k_exhibit(cik: int, accession: str) -> str | None:
+    """The results press release filename inside a 6-K filing
+    (ex99.1-shaped first, descriptive press-release names
+    second — same matcher as the KPI leg, Batch 62)."""
+    cands = exhibit_991_candidates(_filing_index_items(cik, accession))
+    return cands[0] if cands else None
+
+
+def _find_results_6k(recent: dict, cik: int, ticker: str, company_name: str) -> dict | None:
+    """Newest 6-K furnishing an earnings release (Batch 65), with
+    its Exhibit 99.1 resolved as the primary document. None when
+    no recent 6-K is a results 6-K."""
+    sixks = [(i, recent["accessionNumber"][i], recent["primaryDocument"][i])
+             for i, form in enumerate(recent["form"]) if form == "6-K"][:_MAX_EARNINGS_CANDIDATES]
+    for i, acc, doc in sixks:
+        try:
+            head = get_filing_text(ticker, acc, doc, max_chars=12000).get("excerpt", "")
+        except Exception:
+            continue
+        if not _is_results_6k_text(head):
+            continue
+        exhibit = _resolve_6k_exhibit(cik, acc)
+        primary = exhibit or doc
+        url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc.replace('-', '')}/{primary}"
+        return {
+            "ticker": ticker, "company_name": company_name, "cik": cik,
+            "form": "6-K", "filingDate": recent["filingDate"][i],
+            "accessionNumber": acc, "primaryDocument": primary, "url": url,
+            "filing_kind": "6-K",
+            "note": "Most recent 6-K furnishing an earnings release (Exhibit 99.1). "
+                    "Foreign private issuer: no 10-Q/8-K, so quarterly figures come "
+                    "from the release text, not XBRL — verify the quarter in the document text.",
+        }
+    return None
 
 
 def get_latest_earnings_filing(ticker: str) -> dict:
@@ -148,6 +210,12 @@ def get_latest_earnings_filing(ticker: str) -> dict:
             idx = i
             break
     if idx is None:
+        # Batch 65: no earnings 8-K — foreign private issuers
+        # (Nebius) report on 6-K. Try the results 6-K before
+        # falling back to the most recent filing overall.
+        sixk = _find_results_6k(recent, facts["cik"], facts["ticker"], facts["company_name"])
+        if sixk is not None:
+            return sixk
         idx = eights[0][0] if eights else 0
     acc = recent["accessionNumber"][idx]
     doc = recent["primaryDocument"][idx]

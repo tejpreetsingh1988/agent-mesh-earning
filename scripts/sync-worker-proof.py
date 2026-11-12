@@ -199,7 +199,7 @@ def _scout() -> None:
     _sync("scout",
           ["__init__.py", "schemas.py", "scout.py", "scout_async.py", "agent_app.py", "cards.py", "auth.py",
            "edgar.py", "edgar_facts.py", "consensus.py", "news.py", "transcript.py",
-           "market.py", "direct_client.py", "worker_http.py", "async_tools.py"],
+           "market.py", "direct_client.py", "worker_http.py", "async_tools.py", "release_facts.py"],
           base + ENTRYPOINT)
 
 

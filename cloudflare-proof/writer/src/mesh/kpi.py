@@ -368,27 +368,33 @@ def validate_diagram(spec) -> dict | None:
 def pick_earnings_8k(recent: dict, quarter_end_iso: str):
     """Earliest 8-K filed after quarter_end and within 75 days,
     from a submissions 'recent' block ({form, filingDate,
-    accessionNumber} parallel lists). None when nothing fits."""
+    accessionNumber} parallel lists). None when nothing fits.
+    Batch 65: foreign private issuers file 6-K, not 8-K — when
+    no 8-K fits, fall back to the earliest 6-K in the same
+    window (its Exhibit 99.1 is the results release)."""
     try:
         from datetime import date, timedelta
         qe = date.fromisoformat(quarter_end_iso)
     except (ValueError, TypeError):
         return None
-    best = None
     forms = recent.get("form", []) or []
     dates = recent.get("filingDate", []) or []
     accs = recent.get("accessionNumber", []) or []
-    for f, d, a in zip(forms, dates, accs):
-        if f != "8-K":
-            continue
-        try:
-            fd = date.fromisoformat(d)
-        except (ValueError, TypeError):
-            continue
-        if qe < fd <= qe + timedelta(days=75):
-            if best is None or fd < best[0]:
-                best = (fd, a)
-    return best[1] if best else None
+    for want in ("8-K", "6-K"):
+        best = None
+        for f, d, a in zip(forms, dates, accs):
+            if f != want:
+                continue
+            try:
+                fd = date.fromisoformat(d)
+            except (ValueError, TypeError):
+                continue
+            if qe < fd <= qe + timedelta(days=75):
+                if best is None or fd < best[0]:
+                    best = (fd, a)
+        if best is not None:
+            return best[1]
+    return None
 
 
 async def fetch_release_text_async(ticker: str, quarter_end_iso: str,

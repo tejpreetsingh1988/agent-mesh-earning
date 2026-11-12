@@ -25,6 +25,7 @@ error event, so a failed run still ends the stream cleanly
 instead of hanging it.
 """
 import asyncio
+import re
 import time
 import uuid
 
@@ -32,17 +33,27 @@ from .orchestrator import CriticFailed
 from .schemas import Analysis, Briefing, EvidencePack
 from .writer import write_briefing
 
+_STATUS_RE = re.compile(r"^(REPORTED|NOT_REPORTED_YET|UPSTREAM_ERROR) for ")
+
 
 def error_event(e: Exception) -> dict:
     """Final stream event for a failed run. A Critic refusal carries
     its verdict and issues in structured form so the frontend can
     render the gate's decision (final FAIL + reasons) instead of
     guessing from a stringified exception. Every other failure
-    stays a plain error event, as before."""
+    stays a plain error event, as before. Batch 61: the Scout's
+    status rides along as `status` (parsed from the raise's
+    "<STATUS> for <ticker>: ..." prefix), so the frontend can
+    tell an upstream rate limit (retryable) from a genuine
+    not-reported (not retryable) without string-matching."""
     if isinstance(e, CriticFailed):
         return {"event": "error", "error": str(e), "verdict": "FAIL",
                 "issues": e.issues}
-    return {"event": "error", "error": str(e)}
+    ev = {"event": "error", "error": str(e)}
+    m = _STATUS_RE.match(str(e))
+    if m:
+        ev["status"] = m.group(1)
+    return ev
 
 
 async def _emit(on_event, event: dict):
@@ -102,7 +113,7 @@ async def run_briefing_async(ticker: str, scout_fn, analyst_fn, critic_fn, write
     else:
         pack = EvidencePack.model_validate(pack_data)
     if pack.status != "REPORTED":
-        raise ValueError(f"NOT_REPORTED_YET for {ticker}: {pack.missing}")
+        raise ValueError(f"{pack.status} for {ticker}: {pack.missing}")
     analysis_data = resume_from.get("analysis")
     if analysis_data is None:
         started = time.monotonic()

@@ -8,7 +8,7 @@ quarters' numbers as the reported quarter's.
 
 Quarter end now comes, in order, from:
 1. Consensus fiscal_quarter_ending (Nasdaq "Sep/2026" -> 2026-09-30),
-2. The latest non-null quarterly_history period,
+2. The latest fact period (SEC EDGAR XBRL facts),
 3. A submissions reportDate only if its month is a quarter-end
    month (3, 6, 9, 12),
 and never from the filing date. If none of those give a quarter
@@ -25,6 +25,8 @@ import calendar
 import re
 from datetime import date, datetime, timedelta, timezone
 
+from .edgar import _resolve_6k_exhibit
+from .release_facts import extract_release_facts, quarter_end_from_release
 from .schemas import EvidencePack, Fact, SourceRef
 
 _QUARTERS = {3: "Q1", 6: "Q2", 9: "Q3", 12: "Q4"}
@@ -89,6 +91,29 @@ def _same_fiscal_month(a: str, b: str) -> bool:
     return (da.year, da.month) == (db.year, db.month)
 
 
+def _exact_quarter_end_from_filings(recent, month_end_str: str) -> str | None:
+    """The latest 10-Q reportDate in a list_recent_filings result
+    that falls in the same fiscal month as month_end_str, or
+    None. A 10-Q's reportDate IS its quarter end, so it replaces
+    the Nasdaq month-end approximation (NVDA: 2026-07-26, not
+    2026-07-31) with the filing's own date. Only a same-month
+    10-Q counts — the consensus row still identifies the quarter,
+    the filing only sharpens its date. Batch 57: the latest NVDA
+    run carried quarter_end 2026-07-31 while all four of its facts
+    sit at 2026-07-26."""
+    if not month_end_str or not isinstance(recent, dict):
+        return None
+    out = None
+    for f in (recent.get("filings") or []):
+        if not isinstance(f, dict) or f.get("form") != "10-Q":
+            continue
+        rd = f.get("reportDate") or ""
+        if rd and _same_fiscal_month(rd, month_end_str):
+            if out is None or rd > out:
+                out = rd
+    return out
+
+
 def _shift_days(iso: str, days: int) -> str:
     return (date.fromisoformat(iso) + timedelta(days=days)).isoformat()
 
@@ -117,6 +142,23 @@ def _pick_quarter_filing(candidates, requested_end, endings):
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _is_upstream_error(exc: Exception | str) -> bool:
+    """True when a failure looks like a rate limit or transient
+    transport fault (the SEC 429s the Workers' shared egress IPs
+    hit intermittently), not a genuine not-reported state.
+    Batch 61: a 429 on the submissions fetch was labelled
+    NOT_REPORTED_YET, which told the user the company had not
+    reported — the wrong story, and one with no retry offered."""
+    s = str(exc).lower()
+    return ("429" in s or "rate limit" in s or "rate-limit" in s
+            or "too many requests" in s or "temporarily unavailable" in s
+            or "service unavailable" in s or "timed out" in s or "timeout" in s)
+
+
+def _failure_status(exc: Exception | str) -> str:
+    return "UPSTREAM_ERROR" if _is_upstream_error(exc) else "NOT_REPORTED_YET"
 
 
 def collect_evidence(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
@@ -155,7 +197,7 @@ def collect_evidence(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
     except Exception as e:
         return EvidencePack(
             ticker=t, company_name=t, quarter_label="", quarter_end=date(1970, 1, 1),
-            report_date=_now(), status="NOT_REPORTED_YET",
+            report_date=_now(), status=_failure_status(e),
             missing=[f"filings-mcp get_company_facts failed: {e}"],
         )
     if not isinstance(facts, dict) or "error" in facts:
@@ -182,19 +224,25 @@ def collect_evidence(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
         except Exception as e:
             return EvidencePack(
                 ticker=t, company_name=company_name, quarter_label=quarter, quarter_end=date.fromisoformat(requested_end),
-                report_date=_now(), status="NOT_REPORTED_YET",
+                report_date=_now(), status=_failure_status(e),
                 missing=[f"Cannot select a filing for {quarter}: list_recent_filings failed: {e}"],
             )
         if not isinstance(recent_q, dict) or "error" in recent_q:
             return EvidencePack(
                 ticker=t, company_name=company_name, quarter_label=quarter, quarter_end=date.fromisoformat(requested_end),
-                report_date=_now(), status="NOT_REPORTED_YET",
-                missing=[f"Cannot select a filing for {quarter}: list_recent_filings returned an error."],
+                report_date=_now(), status=_failure_status(recent_q.get("error", "") if isinstance(recent_q, dict) else ""),
+                missing=[f"Cannot select a filing for {quarter}: list_recent_filings returned an error: {recent_q.get('error') if isinstance(recent_q, dict) else 'not a dict'}."],
             )
         window_end = _shift_days(requested_end, 75)
         candidates = [f for f in (recent_q.get("filings") or [])
                       if f.get("form") == "8-K" and f.get("filingDate")
                       and requested_end < f["filingDate"] <= window_end]
+        if not candidates:
+            # Batch 65: foreign private issuers report on 6-K —
+            # same window, same consensus confirmation.
+            candidates = [f for f in (recent_q.get("filings") or [])
+                          if f.get("form") == "6-K" and f.get("filingDate")
+                          and requested_end < f["filingDate"] <= window_end]
         endings: dict[str, str | None] = {}
         for cand in sorted(candidates, key=lambda f: f["filingDate"])[:5]:
             try:
@@ -210,25 +258,36 @@ def collect_evidence(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
             return EvidencePack(
                 ticker=t, company_name=company_name, quarter_label=quarter, quarter_end=date.fromisoformat(requested_end),
                 report_date=_now(), status="NOT_REPORTED_YET",
-                missing=[f"No earnings filing (8-K) found for {quarter} — it may not be reported yet, or it is older than the recent-filings window."],
+                missing=[f"No earnings filing (8-K/6-K) found for {quarter} — it may not be reported yet, or it is older than the recent-filings window."],
             )
         if not confirmed:
             missing.append(
-                f"Could not confirm via consensus that this 8-K reported {quarter} — using the earliest 8-K after the quarter end; verify the quarter in the document text.")
+                f"Could not confirm via consensus that this filing reported {quarter} — using the earliest filing after the quarter end; verify the quarter in the document text.")
+        if filing.get("form") == "6-K":
+            # The picked filing is the 6-K shell — the release
+            # lives in its Exhibit 99.1 (Batch 65).
+            try:
+                exhibit = _resolve_6k_exhibit(facts["cik"], filing["accessionNumber"])
+                if exhibit:
+                    filing = {**filing, "primaryDocument": exhibit,
+                              "url": f"https://www.sec.gov/Archives/edgar/data/{facts['cik']}/{filing['accessionNumber'].replace('-', '')}/{exhibit}"}
+            except Exception:
+                pass
     else:
         try:
             filing = mcp_call("filings", "get_latest_earnings_filing", {"ticker": t})
         except Exception as e:
             return EvidencePack(
                 ticker=t, company_name=company_name, quarter_label="", quarter_end=date(1970, 1, 1),
-                report_date=_now(), status="NOT_REPORTED_YET",
+                report_date=_now(), status=_failure_status(e),
                 missing=[f"filings-mcp get_latest_earnings_filing failed: {e}"],
             )
         if not isinstance(filing, dict) or "error" in filing or not filing.get("filingDate"):
             return EvidencePack(
                 ticker=t, company_name=company_name, quarter_label="", quarter_end=date(1970, 1, 1),
-                report_date=_now(), status="NOT_REPORTED_YET",
-                missing=["No recent earnings filing (8-K) found via filings-mcp."],
+                report_date=_now(), status=_failure_status(filing.get("error", "") if isinstance(filing, dict) else ""),
+                missing=["No recent earnings filing (8-K) found via filings-mcp."
+                         + (f" Upstream error: {filing['error']}" if isinstance(filing, dict) and filing.get("error") else "")],
             )
     report_date_str = filing["filingDate"]
     try:
@@ -239,6 +298,7 @@ def collect_evidence(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
     # Submissions reportDate, kept only as a low-priority candidate:
     # for an 8-K it is the event date, not the quarter end.
     submissions_report_date = ""
+    recent = None  # Batch 57: bound even if the fetch below raises.
     try:
         # Limit 50, not 10: the picked earnings filing can be ~10
         # weeks old on the latest path, and the 10 most recent
@@ -259,33 +319,25 @@ def collect_evidence(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
     except Exception as e:
         missing.append(f"get_filing_text failed: {e}")
 
-    # 2. Quarterly history (yfinance, unofficial) -> revenue / opinc facts.
+    # 2. Quarterly facts — SEC EDGAR XBRL only (Batch 64).
+    # The yfinance quarterly_history leg used to supply the base
+    # revenue / operating-income series, with the EDGAR overlay
+    # on top. yfinance is not installed in the Python Workers
+    # (pandas is too heavy), so the leg failed on every deployed
+    # run with "No module named 'yfinance'" — and Yahoo's
+    # quoteSummary endpoint now demands a crumb, so there is no
+    # lightweight drop-in replacement. The overlay below already
+    # returns the full 8-quarter series for every metric from
+    # EDGAR companyconcept (revenue, operating income, net
+    # income, EBITDA, EPS, shares), so the yfinance leg was
+    # redundant: retiring it loses nothing and the Data note
+    # about the failure goes away with it.
     facts_list: list[Fact] = []
-    try:
-        hist = mcp_call("market", "get_quarterly_history", {"ticker": t, "quarters": 8})
-        for q in (hist.get("quarters") or []):
-            period = q.get("period_end", "")
-            src = SourceRef(url="", publisher="yfinance quarterly_financials (unofficial)",
-                            retrieved_at=_now(), excerpt=f"Quarterly history row for period ending {period}.")
-            if q.get("total_revenue") is not None:
-                facts_list.append(Fact(id=f"rev_{period}", metric="total_revenue",
-                                       value=float(q["total_revenue"]) / 1e9, unit="USD_B",
-                                       period=period, source=src))
-            if q.get("operating_income") is not None:
-                facts_list.append(Fact(id=f"opinc_{period}", metric="operating_income",
-                                       value=float(q["operating_income"]) / 1e9, unit="USD_B",
-                                       period=period, source=src))
-        if not facts_list:
-            missing.append("market-mcp quarterly_history returned no revenue/operating-income rows.")
-    except Exception as e:
-        missing.append(f"get_quarterly_history failed: {e}")
 
-    # 2b. Filing-verified facts (SEC EDGAR XBRL) overlay yfinance.
-    # Same metric + period: the EDGAR fact wins, because it is
-    # filing-verified; yfinance remains the fallback for periods
-    # EDGAR lacks. A failed filing-facts call is NOT added to
-    # `missing` and does NOT block the briefing — the pack keeps
-    # its yfinance facts, labelled unofficial, exactly as before.
+    # 2b. Filing-verified facts (SEC EDGAR XBRL).
+    # A failed filing-facts call is NOT added to `missing` and
+    # does NOT block the briefing — the pack keeps whatever
+    # facts it has, labelled by source.
     # The old "not yet parsed" note below disappears automatically
     # when at least one EDGAR fact lands (publisher == "SEC EDGAR").
     try:
@@ -293,18 +345,6 @@ def collect_evidence(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
         if isinstance(filing_facts, dict) and not filing_facts.get("error"):
             by_key = {(f.metric, f.period): f for f in facts_list}
             for ff in (filing_facts.get("facts") or []):
-                # Cross-check: if yfinance already had this period
-                # and EDGAR disagrees by more than 1%, say so in
-                # `missing` (which Analyst copies into risks).
-                # EDGAR still wins — the note is transparency,
-                # not a reason to prefer the unofficial figure.
-                prev = by_key.get((ff["metric"], ff["period"]))
-                if prev is not None and prev.value:
-                    diff = abs(float(ff["value"]) - prev.value) / abs(prev.value)
-                    if diff > 0.01:
-                        missing.append(
-                            f"Cross-check: yfinance {prev.value:.3f} vs SEC EDGAR {float(ff['value']):.3f} "
-                            f"for {ff['metric']} {ff['period']} differ by {diff * 100:.1f}% — EDGAR used.")
                 src = SourceRef(url="", publisher="SEC EDGAR",
                                 retrieved_at=_now(),
                                 excerpt=f"SEC EDGAR XBRL, tag {ff.get('source_tag')}"
@@ -316,6 +356,39 @@ def collect_evidence(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
             facts_list = list(by_key.values())
     except Exception:
         pass
+
+    # 2c. Release-text facts (Batch 65): foreign private issuers
+    # file 6-K, not 10-Q, so there is no XBRL series. When the
+    # overlay found nothing and the earnings filing is a 6-K,
+    # parse the Financial Highlights table of its Exhibit 99.1.
+    # The quarter end comes from the release text itself (a 6-K's
+    # submissions reportDate is the filing date, not the period
+    # end) or from the requested quarter.
+    if not facts_list and filing.get("form") == "6-K":
+        try:
+            release = mcp_call("filings", "get_filing_text", {
+                "ticker": t, "accession": filing.get("accessionNumber"),
+                "primary_document": filing.get("primaryDocument"), "max_chars": 60000})
+            exhibit_text = (release or {}).get("excerpt", "") if isinstance(release, dict) else ""
+            qe = date.fromisoformat(requested_end) if requested_end else quarter_end_from_release(exhibit_text)
+            if qe is None:
+                missing.append("6-K earnings release: could not determine the quarter end from the release text — no release-text facts emitted.")
+            else:
+                parsed = extract_release_facts(exhibit_text, ticker=t, quarter_end=qe,
+                                               exhibit_url=filing.get("url", ""), filing_date=report_date_str)
+                for ff in parsed.get("facts", []):
+                    src = SourceRef(url=ff.get("url", ""), publisher=ff.get("publisher", "SEC EDGAR"),
+                                    retrieved_at=_now(),
+                                    excerpt=f"SEC EDGAR 6-K exhibit 99.1, {ff.get('source_tag')}; form 6-K.")
+                    facts_list.append(Fact(id=ff["id"], metric=ff["metric"], value=float(ff["value"]),
+                                           unit=ff["unit"], period=ff["period"], source=src))
+                missing.extend(parsed.get("missing", []))
+                if parsed.get("facts"):
+                    missing.append(
+                        f"Quarterly figures from the earnings release for the quarter ended {qe} (6-K exhibit 99.1) — "
+                        f"{company_name} files 6-K, not 10-Q, so there is no XBRL series; figures are release text, verified against the exhibit.")
+        except Exception as e:
+            missing.append(f"6-K release-text parse failed: {e}")
 
     # Requested quarter: facts after the quarter end belong to
     # later quarters and must not leak in — the Analyst's "latest"
@@ -383,6 +456,12 @@ def collect_evidence(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
         quarter_end_str = requested_end
     elif isinstance(consensus, dict) and consensus.get("fiscal_quarter_ending"):
         quarter_end_str = _month_end_from_nasdaq(consensus["fiscal_quarter_ending"]) or ""
+        if quarter_end_str:
+            # Batch 57: sharpen the month-end approximation with
+            # the quarter's 10-Q reportDate (NVDA: 2026-07-26).
+            exact = _exact_quarter_end_from_filings(recent, quarter_end_str)
+            if exact:
+                quarter_end_str = exact
     if not quarter_end_str and facts_list:
         # Latest fact period (facts are period_end dates from history).
         try:
@@ -401,7 +480,7 @@ def collect_evidence(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
             quarter_end_str = "2026-09-30"
         else:
             quarter_end_str = report_date_str
-            missing.append("Quarter end could not be derived from consensus or quarterly history; using filing date as quarter_end — verify against the filing, do not trust the quarter label.")
+            missing.append("Quarter end could not be derived from consensus or the quarterly facts; using filing date as quarter_end — verify against the filing, do not trust the quarter label.")
     try:
         quarter_end = date.fromisoformat(quarter_end_str)
     except ValueError:
@@ -439,8 +518,8 @@ def collect_evidence(ticker: str, mcp_call, quarter: str = "") -> EvidencePack:
         except ValueError:
             pass
 
-    if not any(f.source.publisher == "SEC EDGAR" for f in facts_list):
-        missing.append("Filing-verified revenue/EPS facts not yet parsed from the 8-K (Day 2 gives an excerpt only); quarterly facts in this pack are yfinance-sourced and labelled unofficial.")
+    if not any((f.source.publisher or "").startswith("SEC EDGAR") for f in facts_list):
+        missing.append("No filing-verified quarterly facts could be parsed from SEC EDGAR for this ticker — the briefing has no quarterly numbers.")
 
     return EvidencePack(
         ticker=t, company_name=company_name, quarter_label=quarter_label,

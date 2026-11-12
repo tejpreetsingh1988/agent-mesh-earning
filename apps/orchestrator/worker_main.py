@@ -38,7 +38,7 @@ from mesh.history import history_for_ticker
 from mesh.dividends import dividends_for_ticker
 from mesh.shareholder_yield import shareholder_yield_for_ticker
 from mesh.past_reactions import past_reactions_for_ticker
-from mesh.calendar import calendar_for_week
+from mesh.calendar import calendar_for_month
 from mesh.news_rss import news_for_ticker
 from mesh.orchestrator_async import error_event, run_briefing_async
 from mesh.ownership import fetch_ownership_async
@@ -320,12 +320,21 @@ async def past_reactions(ticker: str = ""):
 
 
 @app.get("/calendar")
-async def calendar():
-    """Earnings calendar strip (Feature 11): the next 7 days of
-    Nasdaq earnings-calendar rows, computed in mesh/calendar.py.
-    The frontend filters to directory tickers; a failed day
-    carries error: true and the strip shows it as unavailable."""
-    return await calendar_for_week()
+async def calendar(month: str = ""):
+    """Earnings calendar grid (Feature 11, Batch 66): every day
+    of the requested month ("YYYY-MM", default: the current
+    month) with its Nasdaq earnings-calendar rows, computed in
+    mesh/calendar.py. The frontend filters to directory tickers;
+    a failed day carries error: true and the grid marks it
+    unavailable. An unparseable month falls back to the current
+    month, never an error."""
+    import re
+    from datetime import date as _date
+    today = _date.today()
+    m = re.fullmatch(r"(\d{4})-(\d{2})", (month or "").strip())
+    if m and 1 <= int(m.group(2)) <= 12:
+        return await calendar_for_month(int(m.group(1)), int(m.group(2)))
+    return await calendar_for_month(today.year, today.month)
 
 
 @app.get("/news")

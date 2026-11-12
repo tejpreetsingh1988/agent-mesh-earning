@@ -125,9 +125,36 @@ export async function getLatestEarningsFiling(ticker: string) {
 	const sub = await getSubmissions(facts.cik_padded);
 	const recent = sub.filings.recent;
 	let idx = recent.form.indexOf("8-K");
+	if (idx === -1) {
+		// Batch 65: foreign private issuers (Nebius) file 6-K, not
+		// 8-K — the results release is Exhibit 99.1 to the 6-K.
+		idx = recent.form.indexOf("6-K");
+	}
 	if (idx === -1) idx = 0;
 	const acc = recent.accessionNumber[idx];
-	const doc = recent.primaryDocument[idx];
+	let doc = recent.primaryDocument[idx];
+	let filingKind = recent.form[idx];
+	let note =
+		"8-K is the usual earnings-release filing. Verify the quarter in the document text — do not assume it from the filing date alone.";
+	if (recent.form[idx] === "6-K") {
+		// Resolve the Exhibit 99.1 press release inside the 6-K;
+		// on failure keep the shell as primaryDocument.
+		try {
+			const index = await getJson(
+				`https://www.sec.gov/Archives/edgar/data/${facts.cik}/${acc.replace(/-/g, "")}/index.json`,
+			);
+			const items = (index?.directory?.item ?? []) as any[];
+			const ex991 = items
+				.map((it) => it?.name ?? "")
+				.find((n: string) => /ex(?:hibit)?[-_]?99[-_.]?1/i.test(n) && /\.html?$/i.test(n));
+			if (ex991) doc = ex991;
+		} catch {
+			/* keep the shell */
+		}
+		filingKind = "6-K";
+		note =
+			"Most recent 6-K furnishing an earnings release (Exhibit 99.1). Foreign private issuer: no 10-Q/8-K, so quarterly figures come from the release text, not XBRL — verify the quarter in the document text.";
+	}
 	return {
 		ticker: facts.ticker,
 		company_name: facts.company_name,
@@ -137,7 +164,8 @@ export async function getLatestEarningsFiling(ticker: string) {
 		accessionNumber: acc,
 		primaryDocument: doc,
 		url: `https://www.sec.gov/Archives/edgar/data/${facts.cik}/${acc.replace(/-/g, "")}/${doc}`,
-		note: "8-K is the usual earnings-release filing. Verify the quarter in the document text — do not assume it from the filing date alone.",
+		filing_kind: filingKind,
+		note,
 	};
 }
 

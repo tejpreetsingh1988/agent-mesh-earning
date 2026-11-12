@@ -35,7 +35,7 @@ def run_briefing(ticker: str, scout_fn, analyst_fn, critic_fn, writer_fn=None) -
     pack_data = scout_fn(ticker)
     pack = EvidencePack.model_validate(pack_data)
     if pack.status != "REPORTED":
-        raise ValueError(f"NOT_REPORTED_YET for {ticker}: {pack.missing}")
+        raise ValueError(f"{pack.status} for {ticker}: {pack.missing}")
     analysis_data = analyst_fn(pack_data)
     analysis = Analysis.model_validate(analysis_data)
 

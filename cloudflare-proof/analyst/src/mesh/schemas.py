@@ -27,7 +27,7 @@ class EvidencePack(BaseModel):
     quarter_label: str
     quarter_end: date
     report_date: datetime
-    status: Literal["REPORTED", "NOT_REPORTED_YET"]
+    status: Literal["REPORTED", "NOT_REPORTED_YET", "UPSTREAM_ERROR"]
     facts: list[Fact] = []
     guidance_verbatim: list[str] = []
     consensus: dict | None = None
@@ -70,5 +70,16 @@ class Briefing(BaseModel):
     story_tokens_out: int | None = None
     story_latency_s: float | None = None
     transcript_url: str = ""
+    transcript_excerpt: str = ""
+    quarter_end: str = ""
+    fine_print: list[dict] = []
+    kpis: list[dict] = []
+    kpi_source_url: str = ""
+    diagram: dict | None = None
+    # Batch 42: the KPI chain's debug dict (fetched_chars,
+    # settled_on, replies, errors, diagram) rides the briefing
+    # so a full run's KPI outcome is diagnosable from the stream
+    # event alone — no dashboard log read needed. Not rendered.
+    kpi_debug: dict = {}
     disclaimer: str = "Informational only. Not investment advice."
     trace_id: str

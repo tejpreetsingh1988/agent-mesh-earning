@@ -67,7 +67,9 @@ def quarter_ends_from_recent(recent, n=MAX_QUARTERS):
 def earnings_8k_candidates(recent, quarter_end_iso):
     """8-K (filingDate, accession) pairs filed after the quarter
     end and within 75 days, earliest first. Pure; the index
-    check happens in the caller."""
+    check happens in the caller. Batch 65: when no 8-K fits,
+    fall back to 6-Ks in the same window (foreign private
+    issuers furnish results on 6-K)."""
     try:
         qe = date.fromisoformat(quarter_end_iso)
     except (ValueError, TypeError):
@@ -76,15 +78,18 @@ def earnings_8k_candidates(recent, quarter_end_iso):
     forms = (recent or {}).get("form") or []
     dates = (recent or {}).get("filingDate") or []
     accs = (recent or {}).get("accessionNumber") or []
-    for f, d, a in zip(forms, dates, accs):
-        if f != "8-K" or not d or not a:
-            continue
-        try:
-            fd = date.fromisoformat(d)
-        except ValueError:
-            continue
-        if qe < fd <= qe + timedelta(days=WINDOW_DAYS):
-            out.append((d, a))
+    for want in ("8-K", "6-K"):
+        for f, d, a in zip(forms, dates, accs):
+            if f != want or not d or not a:
+                continue
+            try:
+                fd = date.fromisoformat(d)
+            except ValueError:
+                continue
+            if qe < fd <= qe + timedelta(days=WINDOW_DAYS):
+                out.append((d, a))
+        if out:
+            break
     out.sort(key=lambda p: p[0])
     return out
 

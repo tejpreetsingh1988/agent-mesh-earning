@@ -27,7 +27,7 @@ class EvidencePack(BaseModel):
     quarter_label: str
     quarter_end: date
     report_date: datetime
-    status: Literal["REPORTED", "NOT_REPORTED_YET"]
+    status: Literal["REPORTED", "NOT_REPORTED_YET", "UPSTREAM_ERROR"]
     facts: list[Fact] = []
     guidance_verbatim: list[str] = []
     consensus: dict | None = None

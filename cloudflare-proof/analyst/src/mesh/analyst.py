@@ -62,12 +62,43 @@ def _pct(new: float, old: float) -> float | None:
 
 def _fmt(value: float, unit: str) -> str:
     if unit == "USD_B":
+        # Batch 61: a sub-billion value must never render as
+        # "$0.0B" — DUOL showed "$0.3B -> $0.3B" for +13.7%
+        # growth and "$0.0B -> $0.0B" for -31.2%. Below $1B,
+        # millions carry the information ($300M, $40M).
+        if abs(value) < 1:
+            return f"${value * 1000:.0f}M"
         return f"${value:.1f}B"
     if unit == "USD":
         return f"${value:.2f}"
     if unit == "shares_B":
         return f"{value:.2f}B shares"
     return f"{value:.2f}"
+
+
+def _base_effect_note(fs, prev, cur) -> str:
+    """A note when a YoY/QoQ move is driven by an outlier BASE
+    quarter rather than the current one. Batch 61: DUOL's GAAP
+    EPS fell 90.9% YoY because the year-ago quarter ($5.95) was
+    ~6.5x the typical quarterly EPS (~$0.91) — a one-off base,
+    not an operating collapse — and the briefing presented it
+    as a collapse. Fires only on a large move (|pct| >= 25%)
+    whose base is >2.5x the median of the other quarters while
+    the current quarter is within 2x of that median."""
+    others = [f.value for _d, f in fs if f is not prev and f is not cur]
+    if len(others) < 3:
+        return ""
+    pct = _pct(cur.value, prev.value)
+    if pct is None or abs(pct) < 25:
+        return ""
+    median = sorted(others)[len(others) // 2] if len(others) % 2 else (
+        sorted(others)[len(others) // 2 - 1] + sorted(others)[len(others) // 2]) / 2
+    if not median or prev.value <= 2.5 * abs(median):
+        return ""
+    if abs(cur.value) > 2 * abs(median):
+        return ""
+    return (f" — base quarter was {prev.value / abs(median):.1f}x the series median "
+            f"({_fmt(median, prev.unit)}); the move is mostly a base effect, not a run-rate change")
 
 
 def _by_metric(pack: EvidencePack, metric: str):
@@ -118,6 +149,11 @@ def analyse(pack: EvidencePack) -> Analysis:
     # --- Growth: YoY (12m) and QoQ (3m), latest pair each, periods named ---
     for metric, label in [("total_revenue", "Revenue"), ("operating_income", "Operating income"),
                           ("net_income", "Net income"), ("ebitda", "EBITDA"),
+                          # Batch 65: 6-K release-text metrics (adjusted
+                          # basis — labelled as such, never merged with
+                          # the GAAP series above).
+                          ("adjusted_ebitda", "Adjusted EBITDA"),
+                          ("adjusted_net_income", "Adjusted net income"),
                           ("operating_cash_flow", "Operating cash flow"),
                           ("free_cash_flow", "Free cash flow"),
                           ("cash_and_equivalents", "Cash and equivalents"),
@@ -138,7 +174,7 @@ def analyse(pack: EvidencePack) -> Analysis:
                 continue
             growth[metric][kind.lower()] = pct
             add_claim(
-                f"{label} {kind} growth ({prev.period} -> {cur.period}): {pct:+.1f}% ({_fmt(prev.value, prev.unit)} -> {_fmt(cur.value, cur.unit)})",
+                f"{label} {kind} growth ({prev.period} -> {cur.period}): {pct:+.1f}% ({_fmt(prev.value, prev.unit)} -> {_fmt(cur.value, cur.unit)}){_base_effect_note(fs, prev, cur)}",
                 pct, f"({cur.value} - {prev.value}) / |{prev.value}| * 100, from facts {cur.id} and {prev.id}.",
                 [cur.id, prev.id])
 

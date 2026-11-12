@@ -407,11 +407,38 @@ footer .btn-secondary { margin-top: 0; }
   .page-head .page-sub, .hero-steps { display: none; }
   .card, .agent-card { box-shadow: none; border-color: #d4d4d8; }
   [data-theme="dark"] .story p, [data-theme="dark"] .agent-body .story p { color: #000; }
-/* ---- Feature 11: earnings calendar strip ---- */
-.calendar-row { display: flex; align-items: baseline; gap: 12px; padding: 6px 0; border-top: 1px solid var(--border); }
-.calendar-row:first-child { border-top: none; }
-.calendar-day { flex: 0 0 92px; font-weight: 600; font-size: 13px; }
-.calendar-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+/* ---- Feature 11, Batch 66: earnings calendar month grid ---- */
+.cal-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.cal-title { font-size: 15px; font-weight: 800; }
+.cal-nav-btn { width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--foreground); font-size: 16px; line-height: 1; cursor: pointer; }
+.cal-nav-btn:hover { background: var(--muted); }
+.cal-today-btn { margin-left: auto; height: 28px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--foreground); font-size: 12px; font-weight: 600; cursor: pointer; }
+.cal-today-btn:hover { background: var(--muted); }
+.cal-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-bottom: 4px; }
+.cal-weekdays span { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted-foreground); text-align: center; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.cal-cell { min-height: 76px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); padding: 6px; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+.cal-cell.cal-blank { border-color: transparent; background: transparent; }
+.cal-cell.cal-today { border-color: var(--info); box-shadow: 0 0 0 1px var(--info); }
+.cal-num { font-size: 12px; font-weight: 700; color: var(--muted-foreground); }
+.cal-today .cal-num { color: var(--info); }
+.cal-entry { display: flex; align-items: center; gap: 4px; width: 100%; border: none; border-radius: 6px; background: transparent; padding: 2px 3px; cursor: pointer; text-align: left; }
+.cal-entry:hover { background: var(--muted); }
+.cal-entry .logo-cal { width: 16px; height: 16px; flex: 0 0 16px; border-radius: 4px; }
+.cal-entry .logo-initials { width: 16px; height: 16px; flex: 0 0 16px; font-size: 8px; }
+.cal-ticker { font-size: 12px; font-weight: 700; color: var(--foreground); }
+.cal-pill { margin-left: auto; flex: 0 0 auto; font-size: 9px; font-weight: 700; letter-spacing: 0.02em; padding: 1px 5px; border-radius: 999px; border: 1px solid transparent; white-space: nowrap; }
+.cal-pill-before { background: var(--warning-bg); color: var(--warning); border-color: var(--warning-border); }
+.cal-pill-after { background: var(--info-bg); color: var(--info); border-color: var(--info-border); }
+.cal-more { border: none; background: transparent; color: var(--info); font-size: 11px; font-weight: 600; padding: 2px 3px; cursor: pointer; text-align: left; }
+.cal-more:hover { text-decoration: underline; }
+.cal-err { font-size: 10px; font-weight: 600; color: var(--warning); }
+.cal-legend { display: flex; gap: 12px; margin-top: 10px; font-size: 11px; color: var(--muted-foreground); }
+@media (max-width: 560px) {
+  .cal-cell { min-height: 58px; padding: 4px; }
+  .cal-pill { font-size: 0; width: 7px; height: 7px; padding: 0; border-radius: 50%; }
+  .cal-ticker { font-size: 11px; }
+}
 
   [data-theme="dark"] .agent-pass { color: #15803d; }
   [data-theme="dark"] .agent-fail, [data-theme="dark"] .alert-title { color: #991b1b; }
@@ -525,8 +552,8 @@ footer .btn-secondary { margin-top: 0; }
 .glance dt { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
 .glance dd { font-size: 17px; font-weight: 800; text-align: left; }
 
-/* Calendar strip: the day becomes a tile, not a bare label. */
-.calendar-day { flex-basis: 110px; background: var(--muted); border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; text-align: center; }
+/* Batch 66: the calendar strip is a month grid now — the old
+   day-tile rule is retired with it. */
 
 /* Batch 59 responsive: the discover grid and the step cards stack
    before the rails do — they live in full-width sections. */
@@ -552,3 +579,15 @@ footer .btn-secondary { margin-top: 0; }
 .loop-leg { color: var(--foreground); }
 [data-theme="dark"] .analyst-filter.is-on { color: var(--background); }
 [data-theme="dark"] .analyst-filter, [data-theme="dark"] .analyst-sort { background: var(--card); color: var(--foreground); }
+
+/* ---- Batch 61: dark-mode Analyst table (Nov 12) ----
+   The table's hover/selected/header/detail colours were hardcoded
+   light (#fff / #f8fafc / #3f3f46): in dark mode a hovered row
+   turned near-white under light text — white-on-white, the sticky
+   header went blank, and the expanded formula row was a white
+   slab. All five now use theme tokens. */
+[data-theme="dark"] table.analyst-table th { background: var(--card); }
+[data-theme="dark"] table.analyst-table tbody tr:hover td { background: var(--muted); }
+[data-theme="dark"] .formula-row td { background: var(--muted) !important; }
+[data-theme="dark"] table.analyst-table td.detail-cell { color: var(--muted-foreground); }
+[data-theme="dark"] .formula-row code { color: var(--muted-foreground); }

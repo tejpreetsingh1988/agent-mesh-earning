@@ -733,9 +733,14 @@ function updateGrowthChart() {
   }
   setChartEmpty("growth", false);
   const colors = { growth: themeColor("#1d4ed8", "#60a5fa"), margin: themeColor("#6d28d9", "#a78bfa"), eps: themeColor("#b45309", "#fbbf24"), price: themeColor("#0f766e", "#2dd4bf"), other: themeColor("#71717a", "#a1a1aa") };
-  makeChart("growth", "bar", rows.map((r) => r.metric.replace(/\s*YoY\s*/i, "")),
+  // Batch 61: the old label strip ate the spaces around "YoY"
+  // ("Revenue YoY growth" -> "Revenuegrowth") and the long labels
+  // rotated diagonally. Labels are now the bare metric ("Revenue",
+  // "Operating income", "GAAP EPS") and never rotate.
+  makeChart("growth", "bar", rows.map((r) => r.metric.replace(/\s*YoY\s*/i, " ").replace(/\s*growth\s*/i, "").replace(/\s+/g, " ").trim()),
     [{ label: "YoY %", data: rows.map((r) => r.valueNum),
-      backgroundColor: rows.map((r) => colors[r.kind] || "#71717a"), borderRadius: 6 }]);
+      backgroundColor: rows.map((r) => colors[r.kind] || "#71717a"), borderRadius: 6 }],
+    { scales: { y: { ticks: { font: { size: 11 } } }, x: { ticks: { font: { size: 11 }, maxRotation: 0 } } } });
 }
 function updateEpsAndMarginCharts() {
   const parsed = (lastAnalystClaims || []).map(parseClaim);
@@ -764,7 +769,12 @@ function updateGlance(quarterLabelText) {
   const latestCell = latest ? rev.cells[rev.periods.indexOf(latest)] : null;
   if ($("glance-quarter")) $("glance-quarter").textContent = quarterLabelText || (latest ? quarterLabel(latest) : "—");
   if ($("glance-revenue")) $("glance-revenue").textContent = latestCell && Number.isFinite(latestCell.value)
-    ? `${round1(latestCell.value)} ${latestCell.unit || ""}`.trim() : "—";
+    // Batch 61: never show a raw unit ("0.3 USD_B"). Money in
+    // USD_B renders through fmtMoney ($300M); shares stay in
+    // billions; anything else keeps its value + unit.
+    ? (latestCell.unit === "USD_B" ? fmtMoney(latestCell.value * 1e9)
+      : latestCell.unit === "shares_B" ? `${round1(latestCell.value)}B shares`
+      : `${round1(latestCell.value)} ${latestCell.unit || ""}`.trim()) : "—";
   const parsed = (lastAnalystClaims || []).map(parseClaim);
   const margin = parsed.find((p) => p.kind === "margin");
   if ($("glance-margin")) $("glance-margin").textContent = margin ? margin.value : "—";
@@ -1100,16 +1110,40 @@ function showCriticFail(ticker, issues) {
 }
 
 function showBriefingError(ticker, message, opts = {}) {
-  $("error-msg").textContent = `Could not build a briefing for ${ticker}.\n${message}\n\n`
-    + `If this says Critic FAIL, the agents disagreed about a number and refused to publish — `
-    + `that refusal is the product working. If it says NOT_REPORTED_YET, the company has not `
-    + `reported its most recent quarter yet. Otherwise, try again in a minute.`;
+  // Batch 61: an upstream rate limit (SEC 429) is not a
+  // not-reported verdict — say so, and offer the retry, because
+  // re-running a minute later can succeed. The status arrives
+  // on the error event; the POST fallback carries it only in
+  // the message text, so match both.
+  const isUpstream = opts.status === "UPSTREAM_ERROR" || /UPSTREAM_ERROR/.test(message || "");
+  let text = `Could not build a briefing for ${ticker}.\n${message}\n\n`;
+  if (isUpstream) {
+    text += `The SEC rate-limited the request — the company's data is fine, the request just needs a minute. Try again shortly.`;
+  } else {
+    text += `If this says Critic FAIL, the agents disagreed about a number and refused to publish — `
+      + `that refusal is the product working. If it says NOT_REPORTED_YET, the company has not `
+      + `reported its most recent quarter yet. Otherwise, try again in a minute.`;
+  }
+  $("error-msg").textContent = text;
   // Retry only when re-running could change the outcome: a broken
-  // connection, not a server verdict (FAIL / NOT_REPORTED_YET
+  // connection or an upstream rate limit, not a server verdict (FAIL / NOT_REPORTED_YET
   // would just reproduce itself).
   const retry = $("error-retry");
-  if (retry) retry.hidden = !opts.retry;
+  if (retry) retry.hidden = !(opts.retry || isUpstream);
   show($("error"), true);
+  // Batch 61: a failed run must not leave a blank page when a
+  // saved briefing exists — restore it under the error, with its
+  // banner, so the user keeps the last good copy (Nov 12, 2026:
+  // a failed MSFT refresh left the page empty because the cache
+  // had already been deleted; the cache now survives a failure).
+  try {
+    const cached = readBriefingCache(ticker, currentQuarter);
+    if (cached && cached.briefing) {
+      lastScoutFacts = cached.facts || [];
+      render(cached.briefing);
+      showCacheBanner(ticker, cached, currentQuarter);
+    }
+  } catch { /* restore is best-effort; the error itself already shows */ }
 }
 
 // Returns true when the stream spoke (briefing rendered or an
@@ -1177,9 +1211,18 @@ async function runStream(ticker, quarter = "", onBriefing = null, resumeRunId = 
             if (ev.verdict === "FAIL") {
               showCriticFail(ticker, ev.issues || []);
             } else {
-              if (workingAgent) setStatus(workingAgent, "failed", "");
+              // Batch 61: mark EVERY unfinished leg failed, not
+              // just the working one — the Nov 12 MSFT run left
+              // the rail contradicting the ledger (a leg ticked
+              // Done while the run had failed). A leg shows Done
+              // only when its *_done event arrived.
+              AGENT_ORDER.forEach((a) => {
+                const el = card(a);
+                if (el && el.dataset.state !== "done") setStatus(a, "failed", "");
+              });
+              workingAgent = null;
               setConductor("Pipeline stopped with an error", "The server reported this run failed");
-              showBriefingError(ticker, ev.error || "Stream failed");
+              showBriefingError(ticker, ev.error || "Stream failed", { status: ev.status });
             }
             return true;
           }
@@ -1303,6 +1346,21 @@ function saveBriefingCache(briefing, quarter) {
     localStorage.setItem(cacheKey(briefing.ticker, quarter), JSON.stringify({
       briefing, facts: lastScoutFacts || [], savedAt,
     }));
+    // Batch 61: a successful save is the moment to clear stale
+    // keys for this ticker — the Nov 5 lesson (an older entry
+    // resurfacing after a refresh) without the Nov 12 bug
+    // (deleting BEFORE the run, so a failed refresh destroyed
+    // the only good copy). Keep only the key just written.
+    // The cleanup lives in the SAME try: if the save itself
+    // throws (a full store), the old copy must survive.
+    const keep = cacheKey(briefing.ticker, quarter);
+    const prefix = `ame_briefing_${briefing.ticker}_`;
+    const stale = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k !== keep && (k.startsWith(prefix) || k === legacyCacheKey(briefing.ticker))) stale.push(k);
+    }
+    stale.forEach((k) => localStorage.removeItem(k));
   } catch { /* cache is best-effort; a full store never breaks a run */ }
   try {
     const b = $("cache-banner");
@@ -1333,23 +1391,15 @@ function showCacheBanner(ticker, cached, quarter) {
   banner.innerHTML = `Showing a briefing saved ${esc(when)} for ${esc(label)}. `
     + `<button type="button" class="btn-secondary" id="cache-refresh">Refresh for latest data</button>`;
   banner.querySelector("#cache-refresh").addEventListener("click", () => {
-    try {
-      // Refresh must clear EVERY key for the ticker: a briefing
-      // can live under LATEST, the legacy key, and an explicit
-      // quarter key, and leaving any one behind lets an older
-      // briefing resurface after the refresh (seen live Nov 5,
-      // 2026: takeaways changed 4 → 3 across reloads of the same
-      // chip because an older entry survived).
-      const prefix = `ame_briefing_${ticker}_`;
-      const keys = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && (k.startsWith(prefix) || k === legacyCacheKey(ticker))) keys.push(k);
-      }
-      keys.forEach((k) => localStorage.removeItem(k));
-    } catch {}
+    // Batch 61: refresh must NOT delete the saved briefing first.
+    // The old handler cleared every key for the ticker, then ran
+    // live — so a failed refresh (SEC 429, Nov 12, 2026) destroyed
+    // the only good copy. Now the run is forced live (skipping the
+    // cache read) and the stale keys are cleared only by a
+    // SUCCESSFUL save (saveBriefingCache). A failed refresh leaves
+    // the saved copy intact, and showBriefingError restores it.
     hideCacheBanner();
-    getBriefing(ticker, quarter);
+    getBriefing(ticker, quarter, null, "", null, true);
   });
   show(banner, true);
 }
@@ -1358,7 +1408,7 @@ function setQuarterButtonsDisabled(disabled) {
   document.querySelectorAll("#quarter-picker button").forEach((b) => { b.disabled = disabled; });
 }
 
-async function getBriefing(ticker, quarter = "", onDone = null, resumeRunId = "", onError = null) {
+async function getBriefing(ticker, quarter = "", onDone = null, resumeRunId = "", onError = null, force = false) {
   ticker = String(ticker || "").trim().toUpperCase();
   quarter = String(quarter || "").trim();
   if (!/^Q[1-4] \d{4}$/.test(quarter) && !/^quarter ended \d{4}-\d{2}-\d{2}$/.test(quarter)) quarter = "";
@@ -1382,8 +1432,9 @@ async function getBriefing(ticker, quarter = "", onDone = null, resumeRunId = ""
   currentQuarter = quarter;
   // Repeat run: serve the saved briefing instantly, with its banner.
   // No pipeline, no agent cards, no log — the banner is the whole story.
+  // A forced run (Refresh button) skips the cache and goes live.
   const cached = readBriefingCache(ticker, quarter);
-  if (cached) {
+  if (cached && !force) {
     lastScoutFacts = cached.facts || [];
     try { render(cached.briefing); } catch (e) { const msg = "Could not display the saved briefing: " + (e && e.message ? e.message : String(e)); if (onError) { onError(msg); return; } showBriefingError(ticker, msg); return; }
     show($("agents"), false);
@@ -1437,7 +1488,16 @@ async function getBriefing(ticker, quarter = "", onDone = null, resumeRunId = ""
       } catch (e) {
         stopElapsed();
         if (onError) onError(e.message);
-        else showBriefingError(ticker, e.message);
+        else {
+          // Batch 61: same leg rule as the stream error path —
+          // no leg stays Waiting after a failed run.
+          AGENT_ORDER.forEach((a) => {
+            const el = card(a);
+            if (el && el.dataset.state !== "done") setStatus(a, "failed", "");
+          });
+          workingAgent = null;
+          showBriefingError(ticker, e.message);
+        }
       }
     }
   } finally {
@@ -1471,7 +1531,10 @@ $("log-download").addEventListener("click", () => {
 $("error-retry").addEventListener("click", () => {
   if (running || !currentTicker) return;
   show($("error"), false);
-  getBriefing(currentTicker, currentQuarter, null, lastRunId);
+  // Batch 61: the retry is a live re-run, never a cache serve —
+  // a failed refresh's retry must go live again, not return the
+  // saved copy the refresh just failed to replace.
+  getBriefing(currentTicker, currentQuarter, null, lastRunId, null, true);
 });
 
 let lastBriefing = null;
@@ -2334,16 +2397,30 @@ function fundsCardHtml(f) {
   if (!f) return "";
   const parts = [];
   if (f.ownership_pct) {
-    parts.push(`<p class="body-text">Institutional ownership: ${esc(f.ownership_pct)} of ${esc(f.shares_outstanding || "—")} million shares outstanding.</p>`);
+    // Batch 61: Nasdaq's SharesOutstandingPCT can exceed 100%
+    // (DUOL showed 103.67%) — shares lent out are counted twice.
+    // Keep the reported figure, but say so when it is impossible
+    // as a plain percentage, instead of presenting it unflagged.
+    const pctNum = parseFloat(String(f.ownership_pct).replace(/%$/, ""));
+    const flag = (Number.isFinite(pctNum) && pctNum > 100)
+      ? " (above 100% — Nasdaq counts lent shares twice, so this is not a share of the company)"
+      : "";
+    parts.push(`<p class="body-text">Institutional ownership: ${esc(f.ownership_pct)} of ${esc(f.shares_outstanding || "—")} million shares outstanding.${esc(flag)}</p>`);
   }
   const pos = [...(f.positions || []), ...(f.new_sold_out || [])];
   if (pos.length) {
     parts.push("<ul class=\"list\">" + pos.map((p) => `<li>${esc(p.label)} — ${esc(p.holders)} holders, ${esc(p.shares)} shares</li>`).join("") + "</ul>");
   }
   if ((f.top || []).length) {
-    // Nasdaq's change_pct already carries a "%" ("2.273%") — strip
-    // it before appending ours, or the row reads "2.273%%".
-    parts.push("<p class=\"body-text\">Largest holders as listed:</p><ul class=\"list\">" + f.top.map((h) => `<li>${esc(h.owner)} — ${esc(h.shares)} shares (${esc(String(h.change_pct ?? "—").replace(/%$/, ""))}%) as of ${esc(h.date)}</li>`).join("") + "</ul>");
+    // Batch 61: the parenthetical was change_pct — the holder's
+    // CHANGE in shares — shown bare after the share count, where
+    // it read as an ownership percentage ("2,332,543 shares
+    // (2019.569%)"). Label it as the change it is.
+    parts.push("<p class=\"body-text\">Largest holders as listed:</p><ul class=\"list\">" + f.top.map((h) => {
+      const chg = String(h.change_pct ?? "").replace(/%$/, "");
+      const chgText = chg === "" || chg === "—" ? "" : `, ${chg.startsWith("-") ? "" : "+"}${chg}% change in shares`;
+      return `<li>${esc(h.owner)} — ${esc(h.shares)} shares${esc(chgText)} as of ${esc(h.date)}</li>`;
+    }).join("") + "</ul>");
   }
   return parts.join("");
 }
@@ -2588,7 +2665,7 @@ async function renderFilings(ticker) {
       .sort((a, b) => String(b.filingDate || "").localeCompare(String(a.filingDate || "")));
     if (!all.length) return;
     setHTML($("b-filings"), all.map((f) =>
-      `<li><strong>${esc(f.form)}</strong> · report ${esc(f.reportDate || "—")} · filed ${esc(f.filingDate || "—")} — <a href="${esc(f.url)}" target="_blank" rel="noopener">Open filing</a></li>`).join(""));
+      `<li><strong>${esc(f.form)}</strong> · report ${esc(f.reportDate || "—")} · filed ${esc(f.filingDate || "—")} · <a href="${esc(f.url)}" target="_blank" rel="noopener">Open filing</a></li>`).join(""));
     show(sec, true);
   } catch { /* hide on failure */ }
 }
@@ -3199,24 +3276,69 @@ async function loadDirectory() {
   return directoryCache;
 }
 
-// Feature 11: earnings calendar strip — who reports this week.
-// Runs on every load: 7 rows (today + 6), each listing that day's
-// directory companies as chips (same chip style as suggestions).
-// Clicking a chip runs that company's latest briefing. A failed
-// day shows "Calendar unavailable for this day"; a day with no
-// directory company shows "No directory company scheduled".
-// Non-directory tickers are dropped silently.
+// Feature 11, Batch 66: earnings calendar as a month grid —
+// who reports, on which day, before the open or after the
+// close, with the company logo. Runs on every load for the
+// current month; ‹ › move months, Today jumps back. Clicking
+// an entry runs that company's latest briefing. A failed day
+// is marked unavailable in its cell, never shown as empty;
+// days with no directory company show just the date number.
+// Non-directory tickers are dropped silently. The timing pill
+// comes from Nasdaq's `time` field ("before"/"after"); a row
+// without one gets no pill, never a guessed time.
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-function calendarDayLabel(iso) {
-  const d = new Date(`${iso}T00:00:00`);
-  return `${WEEKDAYS[d.getDay()]} ${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+const CAL_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const CAL_MAX_VISIBLE = 3;
+let calMonth = null; // "YYYY-MM"; null = current month
+function calMonthParts(monthIso) {
+  const d = monthIso ? new Date(`${monthIso}-01T00:00:00`) : new Date();
+  return { y: d.getFullYear(), m: d.getMonth() };
 }
-async function renderCalendarStrip() {
-  const box = $("calendar-rows");
+function calShift(monthIso, delta) {
+  const { y, m } = calMonthParts(monthIso);
+  const d = new Date(y, m + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function calTimePill(time) {
+  if (time === "before") return `<span class="cal-pill cal-pill-before" title="Reports before market open">Before open</span>`;
+  if (time === "after") return `<span class="cal-pill cal-pill-after" title="Reports after market close">After close</span>`;
+  return "";
+}
+function calEntryHtml(r, names) {
+  const t = String(r.ticker || "").toUpperCase();
+  const name = esc(names[t] || r.name || t);
+  return `<button type="button" class="cal-entry" data-ticker="${esc(t)}" title="${name} — click to run the briefing">${logoImg(t, "logo-img logo-cal")}<span class="cal-ticker">${esc(t)}</span>${calTimePill(r.time)}</button>`;
+}
+function calDayCell(day, tickers, names, todayIso) {
+  const d = new Date(`${day.date}T00:00:00`);
+  const num = d.getDate();
+  const isToday = day.date === todayIso;
+  if (day.error) return `<div class="cal-cell${isToday ? " cal-today" : ""}"><span class="cal-num">${num}</span><span class="cal-err">Unavailable</span></div>`;
+  const mine = (day.rows || []).filter((r) => tickers.has(String(r.ticker || "").toUpperCase()));
+  const visible = mine.slice(0, CAL_MAX_VISIBLE);
+  const extra = mine.length - visible.length;
+  return `<div class="cal-cell${isToday ? " cal-today" : ""}"><span class="cal-num">${num}</span>` +
+    visible.map((r) => calEntryHtml(r, names)).join("") +
+    (extra > 0 ? `<button type="button" class="cal-more" data-date="${esc(day.date)}">+${extra} more</button>` : "") +
+    `</div>`;
+}
+function calGridHtml(monthIso, days, tickers, names, todayIso) {
+  const { y, m } = calMonthParts(monthIso);
+  const firstWeekday = new Date(y, m, 1).getDay();
+  const blanks = Array.from({ length: firstWeekday }, () => `<div class="cal-cell cal-blank"></div>`).join("");
+  const cells = days.map((day) => calDayCell(day, tickers, names, todayIso)).join("");
+  return `<div class="cal-nav"><button type="button" class="cal-nav-btn" data-shift="-1" aria-label="Previous month">‹</button><span class="cal-title">${CAL_MONTHS[m]} ${y}</span><button type="button" class="cal-nav-btn" data-shift="1" aria-label="Next month">›</button><button type="button" class="cal-today-btn">Today</button></div>` +
+    `<div class="cal-weekdays">${WEEKDAYS.map((w) => `<span>${w}</span>`).join("")}</div>` +
+    `<div class="cal-grid">${blanks}${cells}</div>`;
+}
+async function renderCalendarGrid() {
+  const box = $("calendar-grid");
   if (!box) return;
+  const monthIso = calMonth || (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })();
+  box.innerHTML = `<p class="meta">Loading calendar…</p>`;
   try {
     const [resp, dir] = await Promise.all([
-      fetch(`${ORCHESTRATOR_URL}/calendar`),
+      fetch(`${ORCHESTRATOR_URL}/calendar?month=${monthIso}`),
       loadDirectory(),
     ]);
     if (!resp.ok) throw new Error("calendar fetch failed");
@@ -3224,21 +3346,31 @@ async function renderCalendarStrip() {
     const tickers = new Set((dir || []).map((c) => String(c.ticker || "").toUpperCase()));
     const names = {};
     for (const c of dir || []) names[String(c.ticker || "").toUpperCase()] = c.name || c.ticker;
-    box.innerHTML = (data.days || []).map((day) => {
-      const label = calendarDayLabel(day.date);
-      if (day.error) return `<div class="calendar-row"><span class="calendar-day">${esc(label)}</span><span class="meta">Calendar unavailable for this day</span></div>`;
-      const mine = (day.rows || []).filter((r) => tickers.has(String(r.ticker || "").toUpperCase()));
-      if (!mine.length) return `<div class="calendar-row"><span class="calendar-day">${esc(label)}</span><span class="meta">No directory company scheduled</span></div>`;
-      return `<div class="calendar-row"><span class="calendar-day">${esc(label)}</span><span class="calendar-chips">` +
-        mine.map((r) => `<button type="button" class="chip search-match calendar-chip" data-ticker="${esc(r.ticker)}">${logoImg(r.ticker, "logo-img logo-chip")}${esc(names[r.ticker.toUpperCase()] || r.ticker)} (${esc(r.ticker)})</button>`).join("") +
-        `</span></div>`;
-    }).join("");
-    box.querySelectorAll(".calendar-chip").forEach((btn) => {
+    const today = new Date();
+    const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    box.innerHTML = calGridHtml(data.month || monthIso, data.days || [], tickers, names, todayIso);
+    box.querySelectorAll(".cal-nav-btn").forEach((btn) => {
+      btn.addEventListener("click", () => { calMonth = calShift(calMonth, Number(btn.dataset.shift)); renderCalendarGrid(); });
+    });
+    box.querySelector(".cal-today-btn").addEventListener("click", () => { calMonth = null; renderCalendarGrid(); });
+    box.querySelectorAll(".cal-entry").forEach((btn) => {
       btn.addEventListener("click", () => getBriefing(btn.dataset.ticker));
+    });
+    box.querySelectorAll(".cal-more").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const cell = btn.closest(".cal-cell");
+        const day = (data.days || []).find((dd) => dd.date === btn.dataset.date);
+        if (!day || !cell) return;
+        const mine = (day.rows || []).filter((r) => tickers.has(String(r.ticker || "").toUpperCase()));
+        cell.querySelectorAll(".cal-entry").forEach((e) => e.remove());
+        btn.insertAdjacentHTML("beforebegin", mine.map((r) => calEntryHtml(r, names)).join(""));
+        cell.querySelectorAll(".cal-entry").forEach((b) => b.addEventListener("click", () => getBriefing(b.dataset.ticker)));
+        btn.remove();
+      });
     });
   } catch { box.innerHTML = `<p class="meta">Calendar unavailable — try again later.</p>`; }
 }
-renderCalendarStrip();
+renderCalendarGrid();
 // Batch 63: debounced, and never blocked by an in-flight AI search
 // (the old `if (searching) return` froze suggestions for the whole
 // AI round trip). Local filtering only — nothing here touches the

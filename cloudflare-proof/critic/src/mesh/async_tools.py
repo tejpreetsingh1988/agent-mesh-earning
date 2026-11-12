@@ -17,10 +17,12 @@ proof (mesh/scout_async.py via async_direct_call) and by tests.
 Do not add a tool here without adding its sync twin's parity
 case to tests/unit/test_scout_async.py.
 
-Market tools are deliberately thin: they call the sync yfinance
-functions directly. On the Worker yfinance is not installed, so
-the lazy import raises inside Scout's try blocks and lands in
-`missing` — exactly the v1 behaviour. Locally they work as usual.
+Market tools are deliberately thin. The quarterly-history tool
+used to call the sync yfinance functions directly; on the Worker
+yfinance is not installed, so the lazy import raised inside
+Scout's try blocks and landed in `missing` — exactly the v1
+behaviour. Batch 64 re-pointed it at SEC EDGAR XBRL instead, so
+the Worker path never imports yfinance at all.
 """
 import asyncio
 import os
@@ -110,6 +112,49 @@ async def async_list_recent_filings(ticker: str, limit: int = 10) -> dict:
     return {"ticker": facts["ticker"], "company_name": facts["company_name"], "cik": facts["cik"], "filings": out}
 
 
+async def _async_filing_index_items(cik: int, accession: str) -> list:
+    """Async mirror of edgar._filing_index_items."""
+    url = (f"https://www.sec.gov/Archives/edgar/data/{cik}/"
+           f"{accession.replace('-', '')}/index.json")
+    try:
+        index = await fetch_json(url, headers={"User-Agent": edgar_mod.UA})
+        return ((index or {}).get("directory", {}) or {}).get("item", []) or []
+    except Exception:
+        return []
+
+
+async def _async_find_results_6k(recent: dict, cik: int, ticker: str, company_name: str) -> dict | None:
+    """Async mirror of edgar._find_results_6k (Batch 65)."""
+    sixks = [(i, recent["accessionNumber"][i], recent["primaryDocument"][i])
+             for i, form in enumerate(recent["form"]) if form == "6-K"][:edgar_mod._MAX_EARNINGS_CANDIDATES]
+    for i, acc, doc in sixks:
+        try:
+            head = (await async_get_filing_text(ticker, acc, doc, max_chars=12000)).get("excerpt", "")
+        except Exception:
+            continue
+        if not edgar_mod._is_results_6k_text(head):
+            continue
+        cands = edgar_mod.exhibit_991_candidates(await _async_filing_index_items(cik, acc))
+        primary = cands[0] if cands else doc
+        url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc.replace('-', '')}/{primary}"
+        return {
+            "ticker": ticker, "company_name": company_name, "cik": cik,
+            "form": "6-K", "filingDate": recent["filingDate"][i],
+            "accessionNumber": acc, "primaryDocument": primary, "url": url,
+            "filing_kind": "6-K",
+            "note": "Most recent 6-K furnishing an earnings release (Exhibit 99.1). "
+                    "Foreign private issuer: no 10-Q/8-K, so quarterly figures come "
+                    "from the release text, not XBRL — verify the quarter in the document text.",
+        }
+    return None
+
+
+async def async_resolve_6k_exhibit(cik: int, accession: str) -> str | None:
+    """Async mirror of edgar._resolve_6k_exhibit (Batch 65)."""
+    cands = edgar_mod.exhibit_991_candidates(await _async_filing_index_items(cik, accession))
+    return cands[0] if cands else None
+
+
 async def async_get_latest_earnings_filing(ticker: str) -> dict:
     """Async mirror of edgar.get_latest_earnings_filing.
 
@@ -136,6 +181,12 @@ async def async_get_latest_earnings_filing(ticker: str) -> dict:
             idx = i
             break
     if idx is None:
+        # Batch 65: no earnings 8-K — foreign private issuers
+        # (Nebius) report on 6-K. Try the results 6-K before
+        # falling back to the most recent filing overall.
+        sixk = await _async_find_results_6k(recent, facts["cik"], facts["ticker"], facts["company_name"])
+        if sixk is not None:
+            return sixk
         idx = eights[0][0] if eights else 0
     acc = recent["accessionNumber"][idx]
     doc = recent["primaryDocument"][idx]
@@ -429,7 +480,30 @@ async def async_get_price_reaction(ticker: str, report_date: str = "") -> dict:
 
 
 async def async_get_quarterly_history(ticker: str, quarters: int = 4) -> dict:
-    return await _market_tool("get_quarterly_history", ticker, quarters)
+    """Batch 64: the old implementation delegated to the sync
+    yfinance quarterly_financials call, which raises
+    "No module named 'yfinance'" in the Python Workers — the
+    Scout's Data notes carried that failure on every deployed
+    run. The tool now answers from the same EDGAR XBRL series
+    the Scout's overlay uses (async_get_filing_facts), reshaped
+    into the old {period_end, total_revenue, operating_income}
+    rows, so the tool contract survives and the Worker path
+    never imports yfinance. The sync market.get_quarterly_history
+    keeps its yfinance implementation for the Docker/local path
+    only."""
+    ff = await async_get_filing_facts(ticker)
+    if not isinstance(ff, dict) or ff.get("error"):
+        return {"ticker": ticker.upper(), "error": ff.get("error", "EDGAR facts unavailable") if isinstance(ff, dict) else "EDGAR facts unavailable",
+                "source": "SEC EDGAR XBRL"}
+    by_period: dict[str, dict] = {}
+    for f in ff.get("facts") or []:
+        if f.get("metric") not in ("total_revenue", "operating_income"):
+            continue
+        row = by_period.setdefault(f["period"], {"period_end": f["period"]})
+        # Filing facts are USD_B; the old shape is raw USD.
+        row["total_revenue" if f["metric"] == "total_revenue" else "operating_income"] = float(f["value"]) * 1e9
+    rows = sorted(by_period.values(), key=lambda r: r["period_end"], reverse=True)[:quarters]
+    return {"ticker": ticker.upper(), "quarters": rows, "source": "SEC EDGAR XBRL"}
 
 
 async def async_get_company_profile(ticker: str) -> dict:
