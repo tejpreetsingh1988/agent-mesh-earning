@@ -1048,7 +1048,7 @@ function runStatusForEvent(name, ev = {}, ctx = {}) {
       // the text set on click stays; only the dot starts pulsing.
       return { status: null, detail: null, state: "running", rail: null };
     case "scout_started":
-      return { status: "Fetching the earnings filing from SEC EDGAR…", detail: "Step 1 of 4 · Next: Analyst · Usually 30–90s", state: "running", rail: { agent: "scout" } };
+      return { status: "Fetching the earnings filing from SEC EDGAR…", detail: "Step 1 of 4 · Next: Analyst · Whole run usually 1–5 min", state: "running", rail: { agent: "scout" } };
     case "scout_done": {
       const facts = ev.fact_list || [];
       return { status: "Checking the numbers…", detail: `Step 2 of 4 · ${facts.length} facts from the filing · Next: Critic`, state: "running", rail: { agent: "analyst" } };
@@ -1101,6 +1101,7 @@ function onStreamEvent(ev, ticker) {
     setConductor(s.status, s.detail, s.state);
     setStatus("scout", "working", "");
     workingAgent = "scout";
+    setBody("scout", '<p class="agent-working">Working — fetching the earnings filing from SEC EDGAR…</p>');
     setLoop(s.rail.agent, "Scout has the baton — fetching filings.");
     addHandover("Conductor → Scout: fetch filings");
     return;
@@ -1121,6 +1122,7 @@ function onStreamEvent(ev, ticker) {
     setConductor(s.status, s.detail, s.state);
     setStatus("analyst", "working", "");
     workingAgent = "analyst";
+    setBody("analyst", '<p class="agent-working">Working — checking the numbers against the filing…</p>');
     setLoop(s.rail.agent, `Scout handed over ${facts.length} facts.`);
     setHandoverLine("scout-analyst", `Scout → Analyst · ${facts.length} facts${tookText(ev.duration_ms)}`);
     addHandover(`Scout → Analyst: ${facts.length} facts`);
@@ -1140,6 +1142,7 @@ function onStreamEvent(ev, ticker) {
     setConductor(s.status, s.detail, s.state);
     setStatus("critic", "working", "");
     workingAgent = "critic";
+    setBody("critic", '<p class="agent-working">Working — re-checking every claim…</p>');
     setLoop(s.rail.agent, `Analyst handed over ${claims.length} claims.`);
     setHandoverLine("analyst-critic", `Analyst → Critic · ${claims.length} claims${tookText(ev.duration_ms)}`);
     addHandover(`Analyst → Critic: ${claims.length} claims`);
@@ -1157,6 +1160,7 @@ function onStreamEvent(ev, ticker) {
       setConductor(s.status, s.detail, s.state);
       setStatus("writer", "working", "");
       workingAgent = "writer";
+      setBody("writer", '<p class="agent-working">Working — writing the story…</p>');
       setLoop(s.rail.agent, "Critic passed — Writer has the baton.");
       setHandoverLine("critic-writer", `Critic → Writer · PASS${tookText(ev.duration_ms)}`);
       addHandover("Critic → Writer: PASS");
@@ -1167,6 +1171,7 @@ function onStreamEvent(ev, ticker) {
       setStatus("critic", "revising", "");
       setStatus("analyst", "working", "");
       workingAgent = "analyst";
+      setBody("analyst", '<p class="agent-working">Working — revising the claims after Critic feedback…</p>');
       // Batch 72: the conductor previously kept saying "Critic —
       // re-checking" while the Analyst was revising. The status
       // line now follows the revising step.
@@ -1617,7 +1622,7 @@ async function getBriefing(ticker, quarter = "", onDone = null, resumeRunId = ""
   if (resumeRunId) {
     setConductor("Resuming run — replaying completed steps", "Finished stages replay instantly · Only the remaining stages run live", "running");
   } else {
-    setConductor("Starting — Scout is first", "Step 1 of 4 · Next: Analyst · Usually 30–90s", "running");
+    setConductor("Starting — Scout is first", "Step 1 of 4 · Next: Analyst · Whole run usually 1–5 min", "running");
   }
   startElapsed();
   try {

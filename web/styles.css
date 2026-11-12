@@ -737,3 +737,10 @@ footer .btn-secondary { margin-top: 0; }
 .baton-step.is-paused { opacity: 0.75; }
 .baton-step.is-paused .baton-node { animation: none; }
 [data-theme="dark"] .baton-step.is-failed .baton-label { color: #fca5a5; }
+
+/* ---- Batch 73: working card bodies (live visual-check follow-up) ----
+   A step's body said "Queued — …" while its badge said "Working",
+   because resetCards() writes the Queued text and only the badge
+   changed on start. The working body is now set alongside the
+   badge, in full-contrast text (unlike the muted Queued grey). */
+.agent-working { color: var(--foreground); font-size: 14px; margin: 0; }
