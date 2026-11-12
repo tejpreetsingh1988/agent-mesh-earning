@@ -407,6 +407,8 @@ footer .btn-secondary { margin-top: 0; }
   .page-head .page-sub, .hero-steps { display: none; }
   .card, .agent-card { box-shadow: none; border-color: #d4d4d8; }
   [data-theme="dark"] .story p, [data-theme="dark"] .agent-body .story p { color: #000; }
+}
+
 /* ---- Feature 11, Batch 66: earnings calendar month grid ---- */
 .cal-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .cal-title { font-size: 15px; font-weight: 800; }
@@ -489,6 +491,10 @@ footer .btn-secondary { margin-top: 0; }
   .wk-halves { max-width: 340px; }
 }
 
+/* Print (continued — Batch 70): the dark overrides below stay
+   print-only. The Batch 66/67 calendar rules above were trapped
+   inside @media print by mistake; the closer above frees them. */
+@media print {
   [data-theme="dark"] .agent-pass { color: #15803d; }
   [data-theme="dark"] .agent-fail, [data-theme="dark"] .alert-title { color: #991b1b; }
   [data-theme="dark"] .alert-msg { color: #7f1d1d; }
