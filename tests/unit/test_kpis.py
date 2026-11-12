@@ -18,6 +18,18 @@ def test_exhibit_991_candidates():
         "a2026-q3_ex991.htm", "ex99-1.htm", "exhibit991.htm"]
 
 
+def test_exhibit_991_candidates_descriptive_press_release():
+    # Batch 62: CoreWeave's Nov 10 8-K names the release
+    # coreweave3q26earningspress.htm — no 99.1 shape in the name,
+    # but it IS Exhibit 99.1 (the 8-K text says so). Descriptive
+    # names are tried after the ex99.1-shaped ones, never before.
+    items = [{"name": "crwv-20261110.htm"}, {"name": "R1.htm"},
+             {"name": "coreweave3q26earningspress.htm"},
+             {"name": "a2026-q3_ex991.htm"}]
+    assert kpi.exhibit_991_candidates(items) == [
+        "a2026-q3_ex991.htm", "coreweave3q26earningspress.htm"]
+
+
 def test_strip_html():
     raw = ("<html><head><style>.x{color:red}</style><script>var a=1;</script></head>"
            "<body><p>Company-operated same shop sales increased 5.4%.</p>"
@@ -56,6 +68,72 @@ def test_validate_kpis_caps_at_12():
     text = " ".join(f"metric{i} value {i}" for i in range(20))
     items = [{"name": f"m{i}", "value": str(i), "unit": "", "period": ""} for i in range(20)]
     assert len(kpi.validate_kpis(items, text)) == 12
+
+
+def test_validate_kpis_drops_standard_financials():
+    # Batch 56: the prompt excludes revenue / net income / EPS /
+    # EBITDA, but the model still returns them — the live BROS run
+    # carried 2 revenue items. The drop is on the whole
+    # normalized name, so "Revenue per shop" survives.
+    text = ("Total revenues were $549.8 million. Adjusted EBITDA was $380 million. "
+            "Net income was $100 million. EPS was $2.00. "
+            "Revenue per shop was $10,000. Same shop sales grew 5.4%.")
+    items = [
+        {"name": "Total Revenues", "value": "$549.8 million", "period": "Q3 2026"},
+        {"name": "Adjusted EBITDA", "value": "$380 million", "period": "Q3 2026"},
+        {"name": "Net Income", "value": "$100 million", "period": "Q3 2026"},
+        {"name": "EPS", "value": "$2.00", "period": "Q3 2026"},
+        {"name": "Revenue per shop", "value": "$10,000", "period": "Q3 2026"},
+        {"name": "Same shop sales", "value": "5.4%", "period": "Q3 2026"},
+    ]
+    assert [o["name"] for o in kpi.validate_kpis(items, text)] == [
+        "Revenue per shop", "Same shop sales"]
+
+
+def test_validate_kpis_drops_wrong_period():
+    # Batch 56: the live BROS run carried 5 guidance items
+    # labelled 2027, and the Batch 41 direct call had 3 items
+    # mislabelled Q3 2025. A period naming a different quarter
+    # or year than the release's is dropped; an empty or
+    # non-quarter period (TTM) is kept.
+    text = ("Same shop sales grew 5.4% in Q3 2026. Sales grew 4.4% in Q3 2025. "
+            "Goal of 250 shops in 2027. Sales grew 2.5% in Q2 2026. TTM sales grew 9.9%.")
+    items = [
+        {"name": "Same shop sales", "value": "5.4%", "period": "Q3 2026"},
+        {"name": "Prior-year sales", "value": "4.4%", "period": "Q3 2025"},
+        {"name": "2027 shop goal", "value": "250", "period": "2027"},
+        {"name": "Q2 sales", "value": "2.5%", "period": "Q2 2026"},
+        {"name": "TTM sales", "value": "9.9%", "period": "TTM"},
+        {"name": "Unlabelled sales", "value": "5.4%", "period": ""},
+    ]
+    out = kpi.validate_kpis(items, text, quarter_end_iso="2026-09-30")
+    assert [o["name"] for o in out] == [
+        "Same shop sales", "TTM sales", "Unlabelled sales"]
+    # Without a quarter end the period rule stays off (the
+    # existing drops-invented test relies on this) — all six
+    # survive on the verbatim check alone.
+    assert len(kpi.validate_kpis(items, text)) == 6
+
+
+def test_extract_kpis_async_applies_batch56_rules(monkeypatch):
+    # Batch 56 end-to-end: a mixed reply settles with only the
+    # in-quarter, non-revenue items — the exact shape of the
+    # live BROS run's KPI list (12 items, 2 revenue + 5 x 2027).
+    monkeypatch.setattr(kpi, "MODELS", ["m1", "m2"])
+    text = ("Company-operated same shop sales increased 5.4%. "
+            "Total revenues were $549.8 million. Goal of 250 shops in 2027. "
+            "Total revenues of $2.1 billion expected in 2027.")
+
+    async def fake_llm(model, system, user):
+        return {"text": '{"kpis": ['
+                 '{"name": "Company-operated same shop sales", "value": "5.4%", "period": "Q3 2026", "kind": "metric"}, '
+                 '{"name": "Total Revenues", "value": "$549.8 million", "period": "Q3 2026", "kind": "metric"}, '
+                 '{"name": "Total System Shop Openings", "value": "250", "period": "2027", "kind": "outlook"}, '
+                 '{"name": "Total Revenues", "value": "$2.1 billion", "period": "2027", "kind": "outlook"}], "diagram": null}'}
+
+    items, diagram = asyncio.run(kpi.extract_kpis_async(
+        text, llm_call=fake_llm, quarter_end_iso="2026-09-30"))
+    assert [o["name"] for o in items] == ["Company-operated same shop sales"]
 
 
 def test_parse_kpi_json():

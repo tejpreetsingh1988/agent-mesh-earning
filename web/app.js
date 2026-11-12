@@ -2995,7 +2995,9 @@ function logSearch(query, ticker) {
   } catch { /* logging never breaks search */ }
 }
 const searchCache = new Map();
-let searching = false;
+// Batch 63: the in-flight AI search, abortable — a newer search
+// cancels the old one instead of queueing behind a lock.
+let searchAbort = null;
 
 function itemText(item) {
   if (!item || typeof item !== "object") return "";
@@ -3092,17 +3094,47 @@ function renderSearchResults(matches, query, fallback = false) {
   show(box, true);
 }
 
+// Batch 63: ticker search was slow because every Search/Enter went
+// to the AI Search LLM round trip first (seconds), while a lock
+// froze the instant suggestions for the whole wait — and a ticker
+// the local directory already holds never needed the network at
+// all. Local first now: a directory match renders immediately and
+// skips AI Search; the index is only consulted when the directory
+// has nothing, for fuzzy and description-based queries.
+function localMatches(query, dir) {
+  const q = query.toLowerCase();
+  return (dir || []).filter((c) =>
+    c.name.toLowerCase().includes(q) || c.ticker.toLowerCase().includes(q),
+  ).slice(0, 5);
+}
+
 async function searchCompanies() {
   const query = $("company-search").value.trim();
   const box = $("company-results");
-  if (!query || searching) return;
-  logSearch(query, null);
+  if (!query) return;
   if (searchCache.has(query)) {
     const hit = searchCache.get(query);
     renderSearchResults(hit.matches, query, hit.fallback);
     return;
   }
-  searching = true;
+  // Local first: instant, no network. A ticker or name the
+  // directory holds never waits on the AI round trip.
+  const dir = await loadDirectory();
+  const local = localMatches(query, dir);
+  if (local.length) {
+    searchCache.set(query, { matches: local, fallback: false });
+    renderSearchResults(local, query);
+    return;
+  }
+  // No local match: ask the index. A newer search aborts the
+  // in-flight one instead of dropping silently behind a lock,
+  // and an 8s timeout falls through to the unavailable note
+  // rather than hanging on "Searching…" forever.
+  if (searchAbort) searchAbort.abort();
+  const ctrl = new AbortController();
+  searchAbort = ctrl;
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  logSearch(query, null);
   box.innerHTML = `<p class="search-empty">Searching…</p>`;
   show(box, true);
   try {
@@ -3110,6 +3142,7 @@ async function searchCompanies() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ messages: [{ role: "user", content: query }] }),
+      signal: ctrl.signal,
     });
     if (!resp.ok) throw new Error(`Search failed (HTTP ${resp.status})`);
     const body = await resp.json();
@@ -3127,27 +3160,22 @@ async function searchCompanies() {
     }
     searchCache.set(query, { matches, fallback: false });
     if (!matches.length) {
-      // Batch 18: the index found nothing — fall back to the
-      // local directory substring filter (the same matcher as
-      // the instant suggestions) instead of a dead end. This
-      // never burns extra AI Search quota, and the note says so.
-      // The fallback result is cached with its flag, so a repeat
-      // search replays the same note rather than re-querying.
-      const dir = await loadDirectory();
-      const q = query.toLowerCase();
-      const local = dir.filter((c) =>
-        c.name.toLowerCase().includes(q) || c.ticker.toLowerCase().includes(q),
-      ).slice(0, 5);
-      searchCache.set(query, { matches: local, fallback: true });
-      renderSearchResults(local, query, true);
+      // Batch 18: the index found nothing — the local directory
+      // was already checked above and is empty for this query,
+      // so there is no local fallback to offer; the empty state
+      // carries the did-you-mean suggestions instead.
+      renderSearchResults([], query, true);
       return;
     }
     renderSearchResults(matches, query);
   } catch (e) {
+    // Superseded by a newer search: stay silent, it renders.
+    if (ctrl.signal.aborted && searchAbort !== ctrl) return;
     box.innerHTML = `<p class="search-empty">Company search is unavailable right now (${esc(e.message)}) — try a different spelling, or pick a company from the instant matches above.</p>`;
     show(box, true);
   } finally {
-    searching = false;
+    clearTimeout(timer);
+    if (searchAbort === ctrl) searchAbort = null;
   }
 }
 
@@ -3211,19 +3239,24 @@ async function renderCalendarStrip() {
   } catch { box.innerHTML = `<p class="meta">Calendar unavailable — try again later.</p>`; }
 }
 renderCalendarStrip();
-$("company-search").addEventListener("input", async (e) => {
+// Batch 63: debounced, and never blocked by an in-flight AI search
+// (the old `if (searching) return` froze suggestions for the whole
+// AI round trip). Local filtering only — nothing here touches the
+// network after the directory is cached.
+let suggestTimer = null;
+$("company-search").addEventListener("input", (e) => {
   const q = e.target.value.trim().toLowerCase();
   const box = $("company-results");
   if (q.length < 2) { show(box, false); return; }
-  if (searching) return;
-  const dir = await loadDirectory();
-  // Guard against out-of-order resolves while the user keeps typing.
-  if ($("company-search").value.trim().toLowerCase() !== q) return;
-  const matches = dir.filter((c) =>
-    c.name.toLowerCase().includes(q) || c.ticker.toLowerCase().includes(q),
-  ).slice(0, 5);
-  if (!matches.length) { show(box, false); return; }
-  renderSearchResults(matches, e.target.value.trim());
+  clearTimeout(suggestTimer);
+  suggestTimer = setTimeout(async () => {
+    const dir = await loadDirectory();
+    // Guard against out-of-order resolves while the user keeps typing.
+    if ($("company-search").value.trim().toLowerCase() !== q) return;
+    const matches = localMatches(q, dir);
+    if (!matches.length) { show(box, false); return; }
+    renderSearchResults(matches, e.target.value.trim());
+  }, 120);
 });
 
 // Compare picker: same local directory, instant matches only.
@@ -3420,17 +3453,18 @@ function renderRecentBriefings() {
   const chips = $("recent-briefing-chips");
   if (!wrap || !chips) return;
   const items = listCachedBriefings();
+  const count = $("recent-briefings-count");
   if (!items.length) {
-    // Clear stale chips too: with display:flex the hidden attribute
-    // alone would not hide this strip (see the CSS note), so an
-    // empty strip must not leave old chips behind either.
-    chips.innerHTML = "";
-    show(wrap, false);
+    // Batch 60: the card always shows — a fresh browser has no
+    // cached briefings, and hiding the card left an empty third
+    // column in the Discover grid. An empty state instead.
+    chips.innerHTML = `<p class="disc-empty">No saved briefings yet — run one and it will appear here.</p>`;
+    if (count) count.textContent = "0";
+    show(wrap, true);
     return;
   }
   chips.innerHTML = items.map((it) =>
     `<button type="button" class="chip" data-t="${esc(it.ticker)}" data-q="${esc(it.quarter)}">${logoImg(it.ticker, "logo-img logo-chip")}${esc(it.ticker)}${it.label ? ` <span class="tag tag-gray">${esc(shortQuarterLabel(it.label))}</span>` : ""}</button>`).join("");
-  const count = $("recent-briefings-count");
   if (count) count.textContent = String(items.length);
   chips.querySelectorAll(".chip").forEach((btn) => {
     btn.addEventListener("click", () => {

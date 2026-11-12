@@ -667,5 +667,9 @@
   {
     "name": "Altria Group, Inc.",
     "ticker": "MO"
+  },
+  {
+    "name": "CoreWeave, Inc.",
+    "ticker": "CRWV"
   }
 ]

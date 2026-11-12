@@ -19,6 +19,14 @@ UA = os.environ.get("EDGAR_USER_AGENT", "agent-mesh-earnings/0.1 (contact@exampl
 EDGAR_HEADERS = {"User-Agent": UA}
 
 EXHIBIT_991_RE = re.compile(r"ex(?:hibit)?[-_]?99[-_.]?1", re.I)
+# Batch 62: some filers name the results press release descriptively
+# with no 99.1 shape in the filename at all (CoreWeave's Nov 10
+# 8-K carries it as coreweave3q26earningspress.htm — the 8-K text
+# itself says it is attached as Exhibit 99.1). Those files are
+# still the exhibit, so fall back to press-release-shaped names.
+# Order matters: ex99.1-shaped names first (proven), descriptive
+# names second; callers try each candidate until one yields text.
+PRESS_RELEASE_RE = re.compile(r"press|earnings[-_]?release", re.I)
 
 
 def exhibit_991_candidates(items) -> list:
@@ -26,7 +34,10 @@ def exhibit_991_candidates(items) -> list:
     listing. Filers name it unpredictably (a2026-q3_ex991.htm,
     ex99-1.htm, exhibit991.htm), so match the ex99.1 shape, not
     one literal name; HTML only, never the .txt bundle.
-    Moved here from mesh/kpi.py (Batch 54): the Orchestrator
+    Batch 62: a filer may instead name the release descriptively
+    (coreweave3q26earningspress.htm) — those names match the
+    press-release shape below and are tried after the ex99.1
+    names. Moved here from mesh/kpi.py (Batch 54): the Orchestrator
     proof vendors edgar.py but not kpi.py (kpi.py pulls the LLM
     chain), and Feature 20's past_reactions needs this matcher
     on the Orchestrator path. kpi.py re-exports it."""
@@ -34,6 +45,11 @@ def exhibit_991_candidates(items) -> list:
     for it in items or []:
         name = (it or {}).get("name", "") if isinstance(it, dict) else ""
         if name and EXHIBIT_991_RE.search(name) and name.lower().endswith((".htm", ".html")):
+            out.append(name)
+    for it in items or []:
+        name = (it or {}).get("name", "") if isinstance(it, dict) else ""
+        if (name and name not in out and PRESS_RELEASE_RE.search(name)
+                and name.lower().endswith((".htm", ".html"))):
             out.append(name)
     return out
 

@@ -537,3 +537,18 @@ footer .btn-secondary { margin-top: 0; }
 @media (max-width: 560px) {
   .hero-steps { grid-template-columns: 1fr; }
 }
+
+/* ---- Batch 60: visual-check fixes (Nov 12) ----
+   The live check found two real defects: (1) a fresh browser has
+   no cached briefings, so the Discover grid showed two cards plus
+   an empty third column; (2) the baton-rail agent pills
+   (.loop-leg) never set a text colour, so in dark mode they fell
+   back to the UA ButtonText (black) on a dark pill — nearly
+   invisible. Both fixed here, plus the same hardcoded-colour
+   family in the Analyst filter/sort controls (the active filter
+   was white text on a near-white pill in dark mode). */
+.discover { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.disc-empty { font-size: 13px; color: var(--muted-foreground); margin: 0; }
+.loop-leg { color: var(--foreground); }
+[data-theme="dark"] .analyst-filter.is-on { color: var(--background); }
+[data-theme="dark"] .analyst-filter, [data-theme="dark"] .analyst-sort { background: var(--card); color: var(--foreground); }
