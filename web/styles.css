@@ -83,7 +83,7 @@ body { margin: 0; background: var(--background); color: var(--foreground); font-
 .baton-step[data-agent="analyst"] .baton-node { background: #1d4ed8; }
 .baton-step[data-agent="critic"] .baton-node { background: #b45309; }
 .baton-step[data-agent="writer"] .baton-node { background: #6d28d9; }
-.baton-step:not(.is-active):not(.is-done) { opacity: 0.55; }
+.baton-step:not(.is-active):not(.is-done):not(.is-failed):not(.is-paused) { opacity: 0.45; }
 .baton-step.is-active .baton-node { animation: dot-pulse 1.2s ease-in-out infinite; }
 .baton-step.is-done .baton-node { background: #15803d; }
 .baton-label { font-size: 11px; font-weight: 600; color: var(--muted-foreground); }
@@ -266,7 +266,7 @@ table.analyst-table td.detail-cell { color: #3f3f46; font-size: 13px; }
   .conductor { padding: 14px 16px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .baton-step.is-active .baton-node, .agent-card[data-state="working"] .agent-dot { animation: none !important; }
+  .baton-step.is-active .baton-node, .agent-card[data-state="working"] .agent-dot, .conductor-dot.is-running { animation: none !important; }
 }
 
 /* Recent searches strip (Batch 1 UX): chips row under the search box. */
@@ -710,3 +710,30 @@ footer .btn-secondary { margin-top: 0; }
      overflowing the card. */
   .story p, .story li { overflow-wrap: break-word; }
 }
+
+/* ---- Batch 72: unmistakable run progress ---- */
+/* The conductor strip is the one live status line: bigger, bolder,
+   and its dot + left border now carry the run state at a glance —
+   amber + pulsing while running, green when done, red dot + amber
+   border when stopped. The strip was visually identical running
+   or idle (static muted dot, 14px text), which is why the run
+   read as "nothing happening" unless you read the small text
+   beside each card. */
+.conductor-text strong { font-size: 16px; font-weight: 700; }
+.conductor.is-running { border-left: 4px solid #b45309; }
+.conductor.is-done { border-left: 4px solid #15803d; }
+.conductor-dot.is-running { background: #b45309; animation: dot-pulse 1.2s ease-in-out infinite; }
+.conductor-dot.is-done { background: #15803d; }
+.conductor-dot.is-alert { background: #dc2626; }
+/* Baton rail: the running step is bold-labelled with a ringed,
+   pulsing node; done steps are green with a check; waiting steps
+   are dimmed; a failed step is red with a cross; a frozen step
+   (stream broke) keeps its agent colour, stops pulsing, and sits
+   between done and waiting. */
+.baton-step.is-active .baton-label { font-weight: 800; color: var(--foreground); }
+.baton-step.is-active .baton-node { box-shadow: 0 0 0 3px var(--card), 0 0 0 5px var(--foreground); }
+.baton-step.is-failed .baton-node { background: #dc2626; animation: none; }
+.baton-step.is-failed .baton-label { color: #dc2626; font-weight: 800; }
+.baton-step.is-paused { opacity: 0.75; }
+.baton-step.is-paused .baton-node { animation: none; }
+[data-theme="dark"] .baton-step.is-failed .baton-label { color: #fca5a5; }
