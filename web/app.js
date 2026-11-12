@@ -444,9 +444,27 @@ function openPopover(anchorEl, html) {
   const body = pop.querySelector(".popover-body");
   if (body) body.innerHTML = html;
   pop.hidden = false;
-  // Position below the anchor, inside the briefing article.
   const article = $("briefing");
+  // Batch 68 (Feature 10): on a phone the popover becomes a
+  // full-width in-flow detail instead of a floating box — directly
+  // under the table for claim rows, right after the anchor for
+  // inline anchors (glossary terms). The <560px CSS makes it
+  // position: static, so the inline top/left are cleared here and
+  // it cannot overflow the viewport sideways.
+  if (window.matchMedia("(max-width: 560px)").matches && article) {
+    const wrap = anchorEl ? anchorEl.closest(".analyst-table-wrap") : null;
+    if (wrap) wrap.after(pop);
+    else if (anchorEl) anchorEl.after(pop);
+    else article.appendChild(pop);
+    pop.style.top = "";
+    pop.style.left = "";
+    return;
+  }
+  // Position below the anchor, inside the briefing article.
+  // Re-append to the article first: a previous mobile open may
+  // have moved the shared element under a table.
   if (anchorEl && article) {
+    article.appendChild(pop);
     const a = anchorEl.getBoundingClientRect();
     const b = article.getBoundingClientRect();
     const top = Math.max(0, a.bottom - b.top + 8);
@@ -3327,9 +3345,10 @@ function calGridHtml(monthIso, days, tickers, names, todayIso) {
   const firstWeekday = new Date(y, m, 1).getDay();
   const blanks = Array.from({ length: firstWeekday }, () => `<div class="cal-cell cal-blank"></div>`).join("");
   const cells = days.map((day) => calDayCell(day, tickers, names, todayIso)).join("");
-  return `<div class="cal-nav"><button type="button" class="cal-nav-btn" data-shift="-1" aria-label="Previous month">‹</button><span class="cal-title">${CAL_MONTHS[m]} ${y}</span><button type="button" class="cal-nav-btn" data-shift="1" aria-label="Next month">›</button><button type="button" class="cal-today-btn">Today</button></div>` +
+  return `<div class="cal-nav"><button type="button" class="cal-nav-btn" data-shift="-1" aria-label="Previous month">‹</button><span class="cal-title">${CAL_MONTHS[m]} ${y}</span><button type="button" class="cal-nav-btn" data-shift="1" aria-label="Next month">›</button><button type="button" class="cal-today-btn">Today</button>${calViewToggleHtml()}</div>` +
     `<div class="cal-weekdays">${WEEKDAYS.map((w) => `<span>${w}</span>`).join("")}</div>` +
-    `<div class="cal-grid">${blanks}${cells}</div>`;
+    `<div class="cal-grid">${blanks}${cells}</div>` +
+    `<p class="cal-legend"><span><span class="cal-pill cal-pill-before">Before open</span> reports before the market opens</span><span><span class="cal-pill cal-pill-after">After close</span> reports after the market closes</span></p>`;
 }
 async function renderCalendarGrid() {
   const box = $("calendar-grid");
@@ -3353,6 +3372,7 @@ async function renderCalendarGrid() {
       btn.addEventListener("click", () => { calMonth = calShift(calMonth, Number(btn.dataset.shift)); renderCalendarGrid(); });
     });
     box.querySelector(".cal-today-btn").addEventListener("click", () => { calMonth = null; renderCalendarGrid(); });
+    wireCalViewToggle(box);
     box.querySelectorAll(".cal-entry").forEach((btn) => {
       btn.addEventListener("click", () => getBriefing(btn.dataset.ticker));
     });
@@ -3370,7 +3390,119 @@ async function renderCalendarGrid() {
     });
   } catch { box.innerHTML = `<p class="meta">Calendar unavailable — try again later.</p>`; }
 }
-renderCalendarGrid();
+// Feature 11, Batch 67: the TipRanks-style week view — the
+// default. A dark panel with five weekday columns (Mon–Fri);
+// each day splits into Before open (☀) and After close (🌙),
+// the timing itself is the structure, and every entry is a big
+// logo tile with its ticker above it. Rows with no timing land
+// in a "Time TBA" foot row, never guessed into a half.
+// Saturday/Sunday reporters appear in a weekend strip below
+// the grid, only when there are any. Clicking a tile runs the
+// briefing. The Batch 66 month grid stays behind the Month
+// toggle. "Most anticipated" is TipRanks' framing, not ours —
+// the panel shows the directory companies reporting that
+// week, with no ranking invented.
+let calView = "week"; // "week" | "month"
+let calWeek = null; // Monday "YYYY-MM-DD"; null = current week
+function calViewToggleHtml() {
+  return `<span class="cal-toggle"><button type="button" class="cal-view-btn${calView === "week" ? " is-on" : ""}" data-view="week">Week</button><button type="button" class="cal-view-btn${calView === "month" ? " is-on" : ""}" data-view="month">Month</button></span>`;
+}
+function wireCalViewToggle(box) {
+  box.querySelectorAll(".cal-view-btn").forEach((btn) => {
+    btn.addEventListener("click", () => { calView = btn.dataset.view; renderCalendar(); });
+  });
+}
+function calWeekMonday(dateIso) {
+  const d = dateIso ? new Date(`${dateIso}T00:00:00`) : new Date();
+  const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7));
+  return `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+}
+function calWeekShift(weekIso, deltaWeeks) {
+  const d = new Date(`${weekIso}T00:00:00`);
+  const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() + deltaWeeks * 7);
+  return `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+}
+function calWeekTitle(mondayIso) {
+  const mon = new Date(`${mondayIso}T00:00:00`);
+  const fri = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 4);
+  const fmt = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return `${fmt(mon)} – ${fmt(fri)}, ${fri.getFullYear()}`;
+}
+function calWeekTileHtml(r, names) {
+  const t = String(r.ticker || "").toUpperCase();
+  const name = esc(names[t] || r.name || t);
+  return `<button type="button" class="wk-tile" data-ticker="${esc(t)}" title="${name} — click to run the briefing"><span class="wk-ticker">${esc(t)}</span><span class="wk-logo">${logoImg(t, "logo-img logo-wk")}</span></button>`;
+}
+function calWeekDayHtml(day, tickers, names, todayIso) {
+  const d = new Date(`${day.date}T00:00:00`);
+  const isToday = day.date === todayIso;
+  const mine = (day.rows || []).filter((r) => tickers.has(String(r.ticker || "").toUpperCase()));
+  const before = mine.filter((r) => r.time === "before");
+  const after = mine.filter((r) => r.time === "after");
+  const tba = mine.filter((r) => r.time !== "before" && r.time !== "after");
+  const head = `${WEEKDAYS[d.getDay()]} ${d.toLocaleDateString("en-US", { month: "numeric", day: "numeric" })}`;
+  if (day.error) return `<div class="wk-day${isToday ? " wk-today" : ""}"><div class="wk-day-head">${esc(head)}</div><span class="wk-err">Unavailable</span></div>`;
+  return `<div class="wk-day${isToday ? " wk-today" : ""}"><div class="wk-day-head">${esc(head)}</div>` +
+    `<div class="wk-halves"><div class="wk-half"><span class="wk-half-label" title="Reports before market open">☀</span>${before.map((r) => calWeekTileHtml(r, names)).join("")}</div>` +
+    `<div class="wk-half"><span class="wk-half-label" title="Reports after market close">🌙</span>${after.map((r) => calWeekTileHtml(r, names)).join("")}</div></div>` +
+    (tba.length ? `<div class="wk-tba"><span class="wk-tba-label">Time TBA</span>${tba.map((r) => calWeekTileHtml(r, names)).join("")}</div>` : "") +
+    `</div>`;
+}
+function calWeekHtml(mondayIso, days, tickers, names, todayIso) {
+  const byDate = {};
+  for (const day of days || []) byDate[day.date] = day;
+  const cols = [];
+  for (let i = 0; i < 5; i++) {
+    const d = new Date(`${mondayIso}T00:00:00`);
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate() + i).padStart(2, "0")}`;
+    cols.push(calWeekDayHtml(byDate[iso] || { date: iso, rows: [] }, tickers, names, todayIso));
+  }
+  const weekend = [5, 6].map((i) => {
+    const d = new Date(`${mondayIso}T00:00:00`);
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate() + i).padStart(2, "0")}`;
+    return byDate[iso] || { date: iso, rows: [] };
+  }).filter((day) => (day.rows || []).some((r) => tickers.has(String(r.ticker || "").toUpperCase())));
+  const weekendHtml = weekend.length ? `<div class="wk-weekend">${weekend.map((day) => {
+    const d = new Date(`${day.date}T00:00:00`);
+    const mine = (day.rows || []).filter((r) => tickers.has(String(r.ticker || "").toUpperCase()));
+    return `<span class="wk-weekend-day">${WEEKDAYS[d.getDay()]} ${d.getDate()}</span>` + mine.map((r) => calWeekTileHtml(r, names)).join("");
+  }).join("")}</div>` : "";
+  return `<div class="wk-panel"><div class="wk-nav"><button type="button" class="wk-nav-btn" data-shift="-1" aria-label="Previous week">‹</button><span class="wk-title">This week · ${calWeekTitle(mondayIso)}</span><button type="button" class="wk-nav-btn" data-shift="1" aria-label="Next week">›</button><button type="button" class="wk-today-btn">This week</button>${calViewToggleHtml()}</div>` +
+    `<div class="wk-days">${cols.join("")}</div>${weekendHtml}</div>`;
+}
+async function renderCalendarWeek() {
+  const box = $("calendar-grid");
+  if (!box) return;
+  const mondayIso = calWeek || calWeekMonday(null);
+  box.innerHTML = `<p class="meta">Loading calendar…</p>`;
+  try {
+    const [resp, dir] = await Promise.all([
+      fetch(`${ORCHESTRATOR_URL}/calendar?week=${mondayIso}`),
+      loadDirectory(),
+    ]);
+    if (!resp.ok) throw new Error("calendar fetch failed");
+    const data = await resp.json();
+    const tickers = new Set((dir || []).map((c) => String(c.ticker || "").toUpperCase()));
+    const names = {};
+    for (const c of dir || []) names[String(c.ticker || "").toUpperCase()] = c.name || c.ticker;
+    const today = new Date();
+    const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    box.innerHTML = calWeekHtml(data.week || mondayIso, data.days || [], tickers, names, todayIso);
+    box.querySelectorAll(".wk-nav-btn").forEach((btn) => {
+      btn.addEventListener("click", () => { calWeek = calWeekShift(calWeek || calWeekMonday(null), Number(btn.dataset.shift)); renderCalendarWeek(); });
+    });
+    box.querySelector(".wk-today-btn").addEventListener("click", () => { calWeek = null; renderCalendarWeek(); });
+    wireCalViewToggle(box);
+    box.querySelectorAll(".wk-tile").forEach((btn) => {
+      btn.addEventListener("click", () => getBriefing(btn.dataset.ticker));
+    });
+  } catch { box.innerHTML = `<p class="meta">Calendar unavailable — try again later.</p>`; }
+}
+function renderCalendar() {
+  if (calView === "month") renderCalendarGrid();
+  else renderCalendarWeek();
+}
+renderCalendar();
 // Batch 63: debounced, and never blocked by an in-flight AI search
 // (the old `if (searching) return` froze suggestions for the whole
 // AI round trip). Local filtering only — nothing here touches the

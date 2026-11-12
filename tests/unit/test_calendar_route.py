@@ -64,3 +64,40 @@ def test_calendar_route_invalid_month_falls_back(monkeypatch):
     for bad in ["2026-13", "november", "2026-1", "2026/11"]:
         asyncio.run(mod.calendar(month=bad))
         assert seen["args"] == (today.year, today.month)
+
+
+def test_calendar_route_week_param(monkeypatch):
+    mod = _load_worker_main()
+    payload = {"week": "2026-11-16",
+               "days": [{"date": "2026-11-17",
+                         "rows": [{"ticker": "NVDA", "name": "NVIDIA Corporation",
+                                   "time": "after"}]}]}
+    seen = {}
+
+    async def fake(day):
+        seen["day"] = day
+        return payload
+
+    monkeypatch.setattr(mod, "calendar_for_week_of", fake)
+    assert asyncio.run(mod.calendar(week="2026-11-17")) == payload
+    assert seen["day"] == date(2026, 11, 17)
+
+
+def test_calendar_route_week_wins_over_month_and_invalid_week_falls_back(monkeypatch):
+    mod = _load_worker_main()
+    calls = {"week": 0, "month": 0}
+
+    async def fake_week(day):
+        calls["week"] += 1
+        return {"week": "2026-11-16", "days": []}
+
+    async def fake_month(year, month):
+        calls["month"] += 1
+        return {"month": f"{year:04d}-{month:02d}", "days": []}
+
+    monkeypatch.setattr(mod, "calendar_for_week_of", fake_week)
+    monkeypatch.setattr(mod, "calendar_for_month", fake_month)
+    asyncio.run(mod.calendar(month="2026-11", week="2026-11-17"))
+    assert calls == {"week": 1, "month": 0}
+    asyncio.run(mod.calendar(month="2026-11", week="not-a-date"))
+    assert calls == {"week": 1, "month": 1}

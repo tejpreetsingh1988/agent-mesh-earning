@@ -126,3 +126,34 @@ def test_calendar_for_month_caps_concurrency():
     out = asyncio.run(calendar.calendar_for_month(2026, 11, fetch_json=fetch_json))
     assert len(out["days"]) == 30
     assert 2 <= state["max_seen"] <= 8
+
+
+def test_monday_of():
+    assert calendar.monday_of(date(2026, 11, 12)) == date(2026, 11, 9)  # Thu
+    assert calendar.monday_of(date(2026, 11, 15)) == date(2026, 11, 9)  # Sun
+    assert calendar.monday_of(date(2026, 11, 9)) == date(2026, 11, 9)  # Mon
+    assert calendar.monday_of(date(2026, 11, 16)) == date(2026, 11, 16)
+
+
+def test_calendar_for_week_of_november_16():
+    async def fetch_json(url, headers=None):
+        day = url.rsplit("=", 1)[1]
+        if day == "2026-11-17":
+            return _body([{"symbol": "NVDA", "name": "NVIDIA Corporation",
+                           "time": "time-after-hours"}])
+        if day == "2026-11-21":
+            raise RuntimeError("Nasdaq down")
+        return _body([])
+
+    # a Tuesday input lands on the Monday of its week
+    out = asyncio.run(calendar.calendar_for_week_of(
+        date(2026, 11, 17), fetch_json=fetch_json))
+    assert out["week"] == "2026-11-16"
+    assert [d["date"] for d in out["days"]] == [
+        "2026-11-16", "2026-11-17", "2026-11-18", "2026-11-19",
+        "2026-11-20", "2026-11-21", "2026-11-22"]
+    nvda = [d for d in out["days"] if d["date"] == "2026-11-17"][0]
+    assert nvda["rows"] == [{"ticker": "NVDA", "name": "NVIDIA Corporation",
+                             "time": "after"}]
+    assert [d for d in out["days"] if d["date"] == "2026-11-21"][0] == {
+        "date": "2026-11-21", "error": True, "rows": []}

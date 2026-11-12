@@ -96,3 +96,20 @@ async def calendar_for_month(year, month, fetch_json=_afetch_json):
 
     return {"month": f"{year:04d}-{month:02d}",
             "days": await asyncio.gather(*[_guarded(d) for d in days])}
+
+
+def monday_of(day):
+    """The Monday of the week containing `day` (Batch 67)."""
+    return day - timedelta(days=day.weekday())
+
+
+async def calendar_for_week_of(day=None, fetch_json=_afetch_json):
+    """{week: "YYYY-MM-DD" (the Monday), days: [...]} for the
+    Monday–Sunday week containing `day` (default: today)
+    (Batch 67 — the TipRanks-style week view). The 7
+    day-fetches run in parallel; one day's failure never takes
+    down the others."""
+    monday = monday_of(day or date.today())
+    days = [(monday + timedelta(days=i)).isoformat() for i in range(7)]
+    return {"week": monday.isoformat(),
+            "days": await asyncio.gather(*[_day(d, fetch_json) for d in days])}

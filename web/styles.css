@@ -440,6 +440,55 @@ footer .btn-secondary { margin-top: 0; }
   .cal-ticker { font-size: 11px; }
 }
 
+/* ---- Feature 11, Batch 67: TipRanks-style week view ---- */
+/* A dark panel in both themes (the sample's look): near-black
+   background, white text, orange day headers. The timing split
+   is the structure — each day column divides into Before open
+   (☀) and After close (🌙) halves, and every entry is a big
+   logo tile. Colour is never the only signal: the halves are
+   labelled with the sun/moon glyphs and titles. */
+.cal-toggle { margin-left: auto; display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.cal-view-btn { border: none; background: var(--card); color: var(--muted-foreground); font-size: 12px; font-weight: 700; padding: 5px 10px; cursor: pointer; }
+.cal-view-btn.is-on { background: var(--muted); color: var(--foreground); }
+.wk-panel { background: #101013; border: 1px solid #27272a; border-radius: 14px; padding: 14px; color: #fafafa; }
+.wk-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.wk-nav .cal-toggle { border-color: #3f3f46; }
+.wk-nav .cal-view-btn { background: #101013; color: #a1a1aa; }
+.wk-nav .cal-view-btn.is-on { background: #27272a; color: #fafafa; }
+.wk-title { font-size: 17px; font-weight: 800; letter-spacing: 0.01em; }
+.wk-nav-btn { width: 28px; height: 28px; border: 1px solid #3f3f46; border-radius: 8px; background: #101013; color: #fafafa; font-size: 16px; line-height: 1; cursor: pointer; }
+.wk-nav-btn:hover { background: #27272a; }
+.wk-today-btn { height: 28px; padding: 0 10px; border: 1px solid #3f3f46; border-radius: 8px; background: #101013; color: #fafafa; font-size: 12px; font-weight: 600; cursor: pointer; }
+.wk-today-btn:hover { background: #27272a; }
+.wk-days { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+.wk-day { border-top: 2px solid #f97316; padding-top: 8px; min-width: 0; }
+.wk-day.wk-today { border-top-color: #fbbf24; }
+.wk-day-head { font-size: 14px; font-weight: 800; color: #fb923c; margin-bottom: 8px; }
+.wk-today .wk-day-head { color: #fbbf24; }
+.wk-halves { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.wk-half { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; }
+.wk-half-label { font-size: 15px; line-height: 1; }
+.wk-half:first-child .wk-half-label { color: #fbbf24; }
+.wk-half:last-child .wk-half-label { color: #a1a1aa; }
+.wk-tile { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; border: none; background: transparent; padding: 0; cursor: pointer; }
+.wk-ticker { font-size: 12px; font-weight: 800; letter-spacing: 0.03em; color: #fafafa; }
+.wk-logo { display: flex; align-items: center; justify-content: center; width: 52px; height: 52px; background: #ffffff; border-radius: 10px; padding: 6px; }
+.wk-logo .logo-img { width: 100%; height: 100%; }
+.wk-logo .logo-initials { width: 100%; height: 100%; background: #ffffff; color: #18181b; font-size: 15px; }
+.wk-tile:hover .wk-logo { box-shadow: 0 0 0 2px #f97316; }
+.wk-tba { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #3f3f46; display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+.wk-tba-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #a1a1aa; width: 100%; }
+.wk-tba .wk-logo { width: 36px; height: 36px; padding: 4px; }
+.wk-tba .wk-logo .logo-initials { font-size: 11px; }
+.wk-err { font-size: 11px; font-weight: 600; color: #fbbf24; }
+.wk-weekend { margin-top: 12px; padding-top: 10px; border-top: 1px solid #27272a; display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+.wk-weekend-day { font-size: 12px; font-weight: 800; color: #fb923c; align-self: center; margin-right: 2px; }
+@media (max-width: 900px) {
+  .wk-days { grid-template-columns: 1fr; }
+  .wk-day { border-top-width: 1px; padding-top: 10px; }
+  .wk-halves { max-width: 340px; }
+}
+
   [data-theme="dark"] .agent-pass { color: #15803d; }
   [data-theme="dark"] .agent-fail, [data-theme="dark"] .alert-title { color: #991b1b; }
   [data-theme="dark"] .alert-msg { color: #7f1d1d; }
@@ -591,3 +640,67 @@ footer .btn-secondary { margin-top: 0; }
 [data-theme="dark"] .formula-row td { background: var(--muted) !important; }
 [data-theme="dark"] table.analyst-table td.detail-cell { color: var(--muted-foreground); }
 [data-theme="dark"] .formula-row code { color: var(--muted-foreground); }
+
+/* ---- Batch 68: Feature 10 — mobile layout pass (Nov 12) ----
+   Why the site was not mobile responsive: the spec sequenced this
+   pass deliberately LAST (Phase 6), after every feature card was
+   built — and it never happened. What existed was piecemeal:
+   the viewport meta, the layout stacking at 1180px, tables
+   scrolling inside their cards, the search row wrapping. What was
+   missing was the coherent pass below. Desktop is untouched except
+   where noted (the 1180px rail order is the spec's own order).
+   No content is hidden on mobile; the left rail is reordered,
+   not removed. Test plan (spec): rendered checks at 360/390/430px
+   and 844px landscape — no horizontal scroll, briefing visible
+   without scrolling past the left rail, every button/chip ≥44px,
+   popover expands in-flow, charts legible, dark mode intact.
+   Rendered checks are owed (no headless Chromium on the VM and
+   the cloud browser cannot resize); the harness audits the rules
+   statically and the popover move in JS. */
+@media (max-width: 1180px) {
+  /* Spec order: search card (already above the layout) → main
+     column → right rail (charts) → left rail (handover detail).
+     Was main → left → right. */
+  .rail-right { order: 2; }
+  .rail-left { order: 3; }
+}
+@media (max-width: 560px) {
+  /* Search row stacks: input full width, button full width. */
+  .search-row { flex-direction: column; }
+  .search-row input { width: 100%; min-width: 0; }
+  #company-go { width: 100%; }
+  /* Every tappable control is at least 44px tall: buttons, chips,
+     switcher buttons, calendar nav, and the month-grid entries
+     (the week tiles were already 52px). min-height beats the
+     fixed heights set above (30/32/36px) without touching desktop. */
+  .btn-secondary, .chip, .analyst-filter, .analyst-sort,
+  .chart-switch-btn, .cal-nav-btn, .cal-today-btn, .cal-view-btn,
+  .wk-nav-btn, .wk-today-btn, .cal-more { min-height: 44px; }
+  .cal-entry { min-height: 44px; }
+  .popover-close { min-width: 44px; min-height: 44px; }
+  /* Analyst table: the first column sticks while the rest scrolls
+     inside .analyst-table-wrap (which already has overflow-x auto).
+     The sticky cells keep an opaque card background so scrolled
+     content never shows through them. */
+  table.analyst-table th:first-child,
+  table.analyst-table td:first-child {
+    position: sticky; left: 0; z-index: 1;
+    background: var(--card);
+    box-shadow: 1px 0 0 var(--border);
+  }
+  /* Claim popover: a full-width in-flow detail instead of a
+     floating box. The JS (openPopover) moves it under the table
+     on mobile and clears the inline top/left; position: static
+     makes those inline offsets inert, so no off-screen overflow
+     and no horizontal page scroll. */
+  .claim-popover { position: static; width: 100%; margin-top: 12px; box-shadow: none; }
+  /* The week/month nav rows wrap instead of overflowing. */
+  .wk-nav, .cal-nav { flex-wrap: wrap; }
+  .wk-title { font-size: 15px; }
+  /* The baton rail scrolls internally rather than forcing the
+     whole page sideways. */
+  .baton-rail { overflow-x: auto; }
+  /* Long unbroken strings (URLs in the story) wrap instead of
+     overflowing the card. */
+  .story p, .story li { overflow-wrap: break-word; }
+}
