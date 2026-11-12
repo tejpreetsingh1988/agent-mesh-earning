@@ -131,16 +131,40 @@ def test_resume_critic_fail_twice_raises():
         raise AssertionError("expected CriticFailed after two FAILs")
 
 
-def test_resume_not_reported_pack_raises_before_analyst():
+def test_resume_not_reported_pack_refetches_scout_live():
+    # Batch 74: a stored NOT_REPORTED_YET pack is discarded, not
+    # raised on — Scout re-runs live and the run completes.
     pack = _pack_data()
     pack["status"] = "NOT_REPORTED_YET"
     pack["missing"] = ["no filing"]
-    try:
-        _run(resume_from={"pack": pack})
-    except ValueError as e:
-        assert "NOT_REPORTED_YET" in str(e)
-    else:
-        raise AssertionError("expected ValueError for NOT_REPORTED_YET pack")
+    briefing, calls, events = _run(resume_from={"pack": pack})
+    assert briefing.ticker == "GOOGL"
+    assert calls["scout"] == 1
+    assert _kinds(events) == ["scout_started", "scout_done", "analyst_done",
+                              "critic_attempt", "writer_done"]
+
+
+def test_resume_upstream_error_pack_refetches_scout_live():
+    # Batch 74, the MSFT case: a stored UPSTREAM_ERROR pack (SEC
+    # 429) is discarded; "Run again" re-fetches instead of
+    # replaying the failure in 0.5s.
+    pack = _pack_data()
+    pack["status"] = "UPSTREAM_ERROR"
+    pack["missing"] = ["SEC 429"]
+    briefing, calls, events = _run(resume_from={"pack": pack})
+    assert briefing.ticker == "GOOGL"
+    assert calls["scout"] == 1
+
+
+def test_resume_bad_pack_discards_stored_analysis():
+    # A stored analysis derived from a failed pack is discarded
+    # with it: the Analyst re-runs on the freshly fetched pack.
+    pack = _pack_data()
+    pack["status"] = "UPSTREAM_ERROR"
+    pack["missing"] = ["SEC 429"]
+    _, calls, _ = _run(resume_from={"pack": pack,
+                                    "analysis": _analysis_data()})
+    assert calls["scout"] == 1 and calls["analyst"] == 1
 
 
 def test_resume_pack_object_is_not_mutated():

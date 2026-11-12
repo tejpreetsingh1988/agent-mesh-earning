@@ -89,12 +89,26 @@ async def run_briefing_async(ticker: str, scout_fn, analyst_fn, critic_fn, write
     for it, and the stored output feeds the next stage. A stored
     critique is honoured only when its verdict is PASS (a stored
     FAIL means the Critic loop runs fresh, as if nothing were
-    stored). This is Batch 31's fast-forward: a resumed run
-    replays the stored events, then runs only the stages the
-    original run never finished."""
+    stored). A stored pack is honoured only when its status is
+    REPORTED (Batch 74: a failed Scout's pack is discarded and
+    Scout re-runs live — see below). This is Batch 31's
+    fast-forward: a resumed run replays the stored events, then
+    runs only the stages the original run never finished."""
     trace_id = str(uuid.uuid4())
     resume_from = resume_from or {}
     pack_data = resume_from.get("pack")
+    if pack_data is not None:
+        # Batch 74: a stored pack fast-forwards Scout ONLY when it
+        # REPORTED. A failed Scout checkpoints its pack too, so a
+        # resume used to skip Scout and then raise on the bad
+        # status — "Run again" replayed the SEC 429 failure in
+        # 0.5s instead of re-fetching. Discard the pack, and with
+        # it any analysis/critique derived from it, so the resumed
+        # run fetches live. (Mirrors the stored-critique rule
+        # below: only a PASS is honoured.)
+        if EvidencePack.model_validate(pack_data).status != "REPORTED":
+            pack_data = None
+            resume_from = {}
     if pack_data is None:
         await _emit(on_event, {"event": "scout_started", "ticker": ticker})
         started = time.monotonic()
