@@ -21,6 +21,11 @@
   --destructive-bg: #fef2f2;
   --destructive-border: #fecaca;
   --radius: 0.625rem;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.06);
+  --shadow-md: 0 4px 16px rgb(0 0 0 / 0.08);
+  --success: #15803d; --success-bg: #f0fdf4; --success-border: #bbf7d0;
+  --warning: #b45309; --warning-bg: #fffbeb; --warning-border: #fde68a;
+  --info: #1d4ed8; --info-bg: #eff6ff; --info-border: #bfdbfe;
   --font-sans: "Inter", ui-sans-system, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --teal: #0f766e; --blue: #1d4ed8; --amber: #b45309; --violet: #6d28d9; --green: #15803d;
@@ -321,6 +326,11 @@ table.analyst-table td.detail-cell { color: #3f3f46; font-size: 13px; }
   --primary: #fafafa; --primary-foreground: #09090b; --secondary: #27272a; --secondary-foreground: #fafafa;
   --destructive: #f87171; --destructive-bg: #450a0a; --destructive-border: #7f1d1d;
   --teal: #2dd4bf; --blue: #60a5fa; --amber: #fbbf24; --violet: #a78bfa; --green: #4ade80;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 4px 16px rgb(0 0 0 / 0.5);
+  --success: #4ade80; --success-bg: #052e16; --success-border: #14532d;
+  --warning: #fbbf24; --warning-bg: #451a03; --warning-border: #78350f;
+  --info: #60a5fa; --info-bg: #172554; --info-border: #1e3a8a;
 }
 .page-head-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .page-head-top .btn-secondary { margin-top: 0; white-space: nowrap; }
@@ -397,8 +407,133 @@ footer .btn-secondary { margin-top: 0; }
   .page-head .page-sub, .hero-steps { display: none; }
   .card, .agent-card { box-shadow: none; border-color: #d4d4d8; }
   [data-theme="dark"] .story p, [data-theme="dark"] .agent-body .story p { color: #000; }
+/* ---- Feature 11: earnings calendar strip ---- */
+.calendar-row { display: flex; align-items: baseline; gap: 12px; padding: 6px 0; border-top: 1px solid var(--border); }
+.calendar-row:first-child { border-top: none; }
+.calendar-day { flex: 0 0 92px; font-weight: 600; font-size: 13px; }
+.calendar-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
   [data-theme="dark"] .agent-pass { color: #15803d; }
   [data-theme="dark"] .agent-fail, [data-theme="dark"] .alert-title { color: #991b1b; }
   [data-theme="dark"] .alert-msg { color: #7f1d1d; }
   a { color: inherit; }
+}
+
+/* ---- Batch 59: card system, colour, tags (UI polish pass) ----
+   Big-company readability: every section is a real card with a
+   header (title + tag + action), colour is purposeful (status and
+   section identity, never decoration alone), and the search card's
+   three flat rows become a Discover zone with a true volume bar.
+   New colours go through tokens so dark mode follows. */
+
+/* Card system: a touch more elevation, and a header pattern
+   (title + subtitle + right-aligned tag) shared by rebuilt sections. */
+.card { box-shadow: var(--shadow-sm); }
+.card-muted { box-shadow: none; }
+.card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.card-head h3 { margin: 0; }
+.card-head .card-sub { font-size: 13px; color: var(--muted-foreground); }
+.card-head .spacer { flex: 1; }
+
+/* Tag pills: small, coloured, always paired with text (colour is
+   never the only signal). */
+.tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; font-size: 11px; font-weight: 700; letter-spacing: 0.02em; border-radius: 999px; border: 1px solid transparent; white-space: nowrap; }
+.tag-teal { background: #f0fdfa; color: #0f766e; border-color: #99f6e4; }
+.tag-blue { background: var(--info-bg); color: var(--info); border-color: var(--info-border); }
+.tag-amber { background: var(--warning-bg); color: var(--warning); border-color: var(--warning-border); }
+.tag-violet { background: #f5f3ff; color: #6d28d9; border-color: #ddd6fe; }
+.tag-green { background: var(--success-bg); color: var(--success); border-color: var(--success-border); }
+.tag-red { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+.tag-gray { background: var(--muted); color: var(--muted-foreground); border-color: var(--border); }
+[data-theme="dark"] .tag-teal { background: #134e4a; color: #2dd4bf; border-color: #115e59; }
+[data-theme="dark"] .tag-violet { background: #2e1065; color: #a78bfa; border-color: #4c1d95; }
+[data-theme="dark"] .tag-red { background: #450a0a; color: #fca5a5; border-color: #7f1d1d; }
+
+/* Section titles inside the briefing get a divider, so each card
+   reads as title, then content, instead of one grey block. */
+#briefing .card > h3, #comparison > h3 { padding-bottom: 10px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+
+/* Hero steps: four real mini-cards, one per agent, numbered and
+   coloured by agent — the pipeline is visible before any run. */
+.hero-steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; counter-reset: step; margin-top: 20px; }
+.hero-steps li { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: 14px 16px; font-size: 13px; color: var(--muted-foreground); counter-increment: step; }
+.hero-steps li::before { content: counter(step); display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; color: #fff; font-size: 12px; font-weight: 800; margin-bottom: 6px; }
+.hero-steps li:nth-child(1)::before { background: var(--teal); }
+.hero-steps li:nth-child(2)::before { background: var(--blue); }
+.hero-steps li:nth-child(3)::before { background: var(--amber); }
+.hero-steps li:nth-child(4)::before { background: var(--violet); }
+.hero-steps li + li::before { content: counter(step); margin: 0 0 6px; }
+.hero-steps li strong { color: var(--foreground); font-size: 14px; }
+
+/* Search input: typed text stays as typed (the old uppercase
+   transform made queries harder to read); the matcher is
+   case-insensitive. */
+.search-row input { text-transform: none; }
+
+/* Keyboard focus, everywhere: a visible outline on every
+   interactive element (Feature 9c, brought forward — cheap,
+   and the polish pass is the right moment for it). */
+:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
+
+/* Discover zone: the search card's three flat rows become three
+   real mini-cards — Your briefings, Recent searches, Most searched
+   (a true volume bar, ranked, not "×N" chips). */
+.discover { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px; }
+.discover:not(:has(> :not([hidden]))) { display: none; }
+.discover-card { background: var(--muted); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; min-width: 0; }
+.discover-card[hidden] { display: none; }
+.discover-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.discover-head h3 { margin: 0; font-size: 13px; font-weight: 700; }
+.discover-head .tag { margin-left: auto; }
+.discover-head .btn-secondary { margin: 0 0 0 8px; height: 28px; padding: 0 10px; font-size: 12px; }
+.discover-head #recent-briefings-clear { margin-left: 8px; }
+.discover-icon { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.disc-teal { background: var(--teal); } .disc-blue { background: var(--blue); } .disc-amber { background: var(--amber); }
+.disc-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+#recent-chips, #recent-briefing-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* Chips: pill-shaped, elevated, with room for a logo and a tag.
+   The hover state darkens the border instead of just greying. */
+.chip { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px; border-radius: 999px; box-shadow: var(--shadow-sm); }
+.chip:hover { background: var(--card); border-color: var(--foreground); }
+.chip .tag { height: 18px; padding: 0 6px; font-size: 10px; margin-left: 2px; }
+.search-match { gap: 8px; }
+
+/* Most searched: a ranked volume list. Each row is a button
+   (click runs the search); the bar shows share of the top query. */
+.vol-list { display: grid; gap: 4px; }
+#most-chips { display: grid; gap: 4px; }
+.vol-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; padding: 4px 8px; font: inherit; font-size: 13px; text-align: left; color: var(--foreground); background: transparent; border: 1px solid transparent; border-radius: 8px; cursor: pointer; }
+.vol-row:hover { background: var(--card); border-color: var(--border); }
+.vol-rank { flex: none; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: var(--muted-foreground); background: var(--muted); border-radius: 50%; }
+.vol-row:nth-child(1) .vol-rank { background: var(--warning-bg); color: var(--warning); }
+.vol-query { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vol-track { flex: 1; height: 8px; background: var(--muted); border-radius: 999px; overflow: hidden; min-width: 40px; }
+.vol-bar { display: block; height: 100%; background: var(--amber); border-radius: 999px; }
+.vol-count { flex: none; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+
+/* Chart cards: a coloured dot before the title, matching the
+   top accent, so the card's identity survives at a glance. */
+.chart-card h3::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #1d4ed8; margin-right: 8px; vertical-align: 1px; }
+.chart-card:nth-of-type(2) h3::before { background: #0f766e; }
+.chart-card:nth-of-type(3) h3::before { background: #b45309; }
+
+/* At a glance: label-above-value stat tiles instead of a plain list. */
+.glance { gap: 12px; }
+.glance div { display: flex; flex-direction: column; justify-content: flex-start; gap: 2px; border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; background: var(--card); }
+.glance div:last-child { border: 1px solid var(--border); padding: 10px 12px; }
+.glance dt { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+.glance dd { font-size: 17px; font-weight: 800; text-align: left; }
+
+/* Calendar strip: the day becomes a tile, not a bare label. */
+.calendar-day { flex-basis: 110px; background: var(--muted); border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; text-align: center; }
+
+/* Batch 59 responsive: the discover grid and the step cards stack
+   before the rails do — they live in full-width sections. */
+@media (max-width: 900px) {
+  .discover { grid-template-columns: 1fr; }
+  .hero-steps { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 560px) {
+  .hero-steps { grid-template-columns: 1fr; }
 }

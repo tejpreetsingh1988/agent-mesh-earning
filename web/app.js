@@ -1293,11 +1293,24 @@ function readBriefingCache(ticker, quarter) {
   } catch { return null; }
 }
 function saveBriefingCache(briefing, quarter) {
+  // Batch 58: a new save must refresh a visible banner for the
+  // same ticker+quarter — the Nov 5 UI pass caught the banner
+  // still showing the old saved time (6:12:44 AM) after a fresh
+  // run saved. A hidden banner stays hidden; a banner for a
+  // different ticker or quarter is untouched.
+  const savedAt = Date.now();
   try {
     localStorage.setItem(cacheKey(briefing.ticker, quarter), JSON.stringify({
-      briefing, facts: lastScoutFacts || [], savedAt: Date.now(),
+      briefing, facts: lastScoutFacts || [], savedAt,
     }));
   } catch { /* cache is best-effort; a full store never breaks a run */ }
+  try {
+    const b = $("cache-banner");
+    if (b && !b.hidden && b.dataset && b.dataset.ticker === briefing.ticker
+        && (b.dataset.quarter || "") === (quarter || "")) {
+      showCacheBanner(briefing.ticker, { briefing, savedAt }, quarter);
+    }
+  } catch { /* banner refresh is best-effort, like the cache */ }
 }
 function hideCacheBanner() {
   const b = $("cache-banner");
@@ -1313,6 +1326,10 @@ function showCacheBanner(ticker, cached, quarter) {
   }
   const when = new Date(cached.savedAt).toLocaleString();
   const label = cached.briefing.quarter_label || "";
+  // Batch 58: stamp the banner with its ticker+quarter so a
+  // later save can tell whether it is the banner to refresh.
+  banner.dataset.ticker = ticker;
+  banner.dataset.quarter = quarter || "";
   banner.innerHTML = `Showing a briefing saved ${esc(when)} for ${esc(label)}. `
     + `<button type="button" class="btn-secondary" id="cache-refresh">Refresh for latest data</button>`;
   banner.querySelector("#cache-refresh").addEventListener("click", () => {
@@ -2576,6 +2593,29 @@ async function renderFilings(ticker) {
   } catch { /* hide on failure */ }
 }
 
+// Feature 24: news around earnings — headlines ±7 days around
+// the briefing's report date, linked and dated, no summary.
+// The route derives the report date itself (the Briefing
+// schema does not carry it). An empty list hides the card.
+// Headlines are the publishers' words — never cited as
+// briefing sources, and no number is ever pulled from one.
+async function renderNews(ticker) {
+  const sec = $("sec-news");
+  if (!sec || !ticker || !lastBriefing || lastBriefing.ticker !== ticker) return;
+  show(sec, false);
+  try {
+    const resp = await fetch(`${ORCHESTRATOR_URL}/news?ticker=${encodeURIComponent(ticker)}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!data || data.error || !lastBriefing || lastBriefing.ticker !== ticker) return; // stale
+    const rows = data.news || [];
+    if (!rows.length) return;
+    setHTML($("b-news"), rows.map((n) =>
+      `<li><a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a> — ${esc(n.publisher || "—")} · ${esc(n.published || "—")}</li>`).join(""));
+    show(sec, true);
+  } catch { /* hide on failure */ }
+}
+
 // Feature 13: quarter trend table — three history series in
 // parallel, aligned by period end. The whole card hides if any
 // fetch fails; a metric missing for a quarter shows "—".
@@ -2639,6 +2679,61 @@ async function renderDividends(ticker) {
       setText(n, `Next ex-date (declared): ${esc(data.next_ex_date.ex_date || "—")} — ${fmtAmt(data.next_ex_date.amount)}`);
       n.hidden = false;
     } else { n.hidden = true; }
+    show(sec, true);
+  } catch { /* hide on failure */ }
+}
+
+// Feature 15: shareholder yield card — (trailing buybacks +
+// trailing dividends) / market cap, all three inputs shown so
+// the ratio can be rechecked by hand. A null payload (any input
+// missing) hides the card, like the dividend card hides on
+// empty rows.
+async function renderShareholderYield(ticker) {
+  const sec = $("chart-yield-card");
+  if (!sec || !ticker || !lastBriefing || lastBriefing.ticker !== ticker) return;
+  show(sec, false);
+  try {
+    const resp = await fetch(`${ORCHESTRATOR_URL}/shareholder-yield?ticker=${encodeURIComponent(ticker)}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!data || data.error || data.shareholder_yield == null || !lastBriefing || lastBriefing.ticker !== ticker) return; // stale
+    setText($("b-yield-value"), `Shareholder yield: ${Number(data.shareholder_yield).toFixed(1)}%`);
+    setText($("b-yield-inputs"),
+      `Buybacks (trailing 4 quarters): ${fmtMoney(data.buybacks_trailing_usd)} · Dividends (trailing 4 quarters): ${fmtMoney(data.dividends_trailing_usd)} · Market cap: ${fmtMoney(data.market_cap_usd)}`);
+    const n = $("b-yield-note");
+    if (data.approximation_note) { setText(n, data.approximation_note); n.hidden = false; }
+    else { n.hidden = true; }
+    show(sec, true);
+  } catch { /* hide on failure */ }
+}
+
+// Feature 20: past earnings reactions table — the close around
+// each of the last four earnings reports. A quarter with no
+// close after the report date yet shows "—" for Close after
+// and Change %. Fewer than 2 rows hides the card; omitted
+// quarters are named in the footer.
+async function renderPastReactions(ticker) {
+  const sec = $("sec-past-reactions");
+  if (!sec || !ticker || !lastBriefing || lastBriefing.ticker !== ticker) return;
+  show(sec, false);
+  try {
+    const resp = await fetch(`${ORCHESTRATOR_URL}/past-reactions?ticker=${encodeURIComponent(ticker)}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!data || data.error || !lastBriefing || lastBriefing.ticker !== ticker) return; // stale
+    const rows = data.rows || [];
+    if (rows.length < 2) return;
+    const fmtClose = (v) => (v == null ? "—" : `$${Number(v).toFixed(2)}`);
+    const fmtChg = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${Number(v).toFixed(1)}%`);
+    setHTML($("b-past-reactions"),
+      `<thead><tr><th>Quarter ended</th><th>Report date</th><th>Close before</th><th>Close after</th><th>Change %</th></tr></thead><tbody>` +
+      rows.map((r) =>
+        `<tr><td>${esc(r.quarter_end || "—")}</td><td>${esc(r.report_date || "—")}</td><td>${fmtClose(r.close_before)}</td><td>${fmtClose(r.close_after)}</td><td>${fmtChg(r.change_pct)}</td></tr>`).join("") +
+      `</tbody>`);
+    const f = $("b-past-reactions-footer");
+    const omitted = data.omitted ? ` ${data.omitted} quarter${data.omitted === 1 ? "" : "s"} omitted (no earnings 8-K identified).` : "";
+    setText(f, `Regular-session closes from Nasdaq (free, unadjusted — a split or large dividend between the two days can distort the move). Daily closes cannot show the after-hours move.${omitted}`);
+    f.hidden = false;
     show(sec, true);
   } catch { /* hide on failure */ }
 }
@@ -2821,8 +2916,11 @@ function render(b) {
   renderOwnership(b.ticker);
   renderHistory(b.ticker);
   renderFilings(b.ticker);
+  renderNews(b.ticker);
   renderTrendTable(b.ticker);
   renderDividends(b.ticker);
+  renderShareholderYield(b.ticker);
+  renderPastReactions(b.ticker);
   renderCashReturn(b.ticker);
   show($("sec-market"), Boolean(b.market_reaction));
   setText($("b-reaction"), b.market_reaction || "");
@@ -3072,6 +3170,47 @@ async function loadDirectory() {
   } catch { directoryCache = []; }
   return directoryCache;
 }
+
+// Feature 11: earnings calendar strip — who reports this week.
+// Runs on every load: 7 rows (today + 6), each listing that day's
+// directory companies as chips (same chip style as suggestions).
+// Clicking a chip runs that company's latest briefing. A failed
+// day shows "Calendar unavailable for this day"; a day with no
+// directory company shows "No directory company scheduled".
+// Non-directory tickers are dropped silently.
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function calendarDayLabel(iso) {
+  const d = new Date(`${iso}T00:00:00`);
+  return `${WEEKDAYS[d.getDay()]} ${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+}
+async function renderCalendarStrip() {
+  const box = $("calendar-rows");
+  if (!box) return;
+  try {
+    const [resp, dir] = await Promise.all([
+      fetch(`${ORCHESTRATOR_URL}/calendar`),
+      loadDirectory(),
+    ]);
+    if (!resp.ok) throw new Error("calendar fetch failed");
+    const data = await resp.json();
+    const tickers = new Set((dir || []).map((c) => String(c.ticker || "").toUpperCase()));
+    const names = {};
+    for (const c of dir || []) names[String(c.ticker || "").toUpperCase()] = c.name || c.ticker;
+    box.innerHTML = (data.days || []).map((day) => {
+      const label = calendarDayLabel(day.date);
+      if (day.error) return `<div class="calendar-row"><span class="calendar-day">${esc(label)}</span><span class="meta">Calendar unavailable for this day</span></div>`;
+      const mine = (day.rows || []).filter((r) => tickers.has(String(r.ticker || "").toUpperCase()));
+      if (!mine.length) return `<div class="calendar-row"><span class="calendar-day">${esc(label)}</span><span class="meta">No directory company scheduled</span></div>`;
+      return `<div class="calendar-row"><span class="calendar-day">${esc(label)}</span><span class="calendar-chips">` +
+        mine.map((r) => `<button type="button" class="chip search-match calendar-chip" data-ticker="${esc(r.ticker)}">${logoImg(r.ticker, "logo-img logo-chip")}${esc(names[r.ticker.toUpperCase()] || r.ticker)} (${esc(r.ticker)})</button>`).join("") +
+        `</span></div>`;
+    }).join("");
+    box.querySelectorAll(".calendar-chip").forEach((btn) => {
+      btn.addEventListener("click", () => getBriefing(btn.dataset.ticker));
+    });
+  } catch { box.innerHTML = `<p class="meta">Calendar unavailable — try again later.</p>`; }
+}
+renderCalendarStrip();
 $("company-search").addEventListener("input", async (e) => {
   const q = e.target.value.trim().toLowerCase();
   const box = $("company-results");
@@ -3184,7 +3323,7 @@ async function renderRecentSearches() {
     }).slice(0, 8);
     if (!items.length) return;
     chips.innerHTML = items.map((s) =>
-      `<button type="button" class="chip search-match" data-q="${esc(s.query)}">${esc(s.query)}${s.ticker ? ` (${esc(s.ticker)})` : ""}</button>`).join("");
+      `<button type="button" class="chip search-match" data-q="${esc(s.query)}">${s.ticker ? logoImg(s.ticker, "logo-img logo-chip") : ""}${esc(s.query)}${s.ticker ? ` <span class="tag tag-gray">${esc(s.ticker)}</span>` : ""}</button>`).join("");
     chips.querySelectorAll(".search-match").forEach((btn) => {
       btn.addEventListener("click", () => {
         $("company-search").value = btn.dataset.q;
@@ -3209,9 +3348,13 @@ async function renderMostSearched() {
     const body = await resp.json();
     const top = (body.top || []).filter((t) => t.query && t.count > 0).slice(0, 8);
     if (!top.length) return;
-    chips.innerHTML = top.map((t) =>
-      `<button type="button" class="chip search-match" data-q="${esc(t.query)}">${esc(t.query)} ×${t.count}</button>`).join("");
-    chips.querySelectorAll(".search-match").forEach((btn) => {
+    // Batch 59: a ranked volume list — rank, query, a bar sized to
+    // the top query's count, and the count. The old "×N" chips
+    // showed volume as text; the bar shows it at a glance.
+    const max = Math.max(...top.map((t) => t.count));
+    chips.innerHTML = top.map((t, i) =>
+      `<button type="button" class="vol-row" data-q="${esc(t.query)}"><span class="vol-rank">${i + 1}</span><span class="vol-query">${esc(t.query)}</span><span class="vol-track"><span class="vol-bar" style="width: ${Math.max(6, Math.round((t.count / max) * 100))}%"></span></span><span class="vol-count">${t.count}</span></button>`).join("");
+    chips.querySelectorAll(".vol-row").forEach((btn) => {
       btn.addEventListener("click", () => {
         $("company-search").value = btn.dataset.q;
         searchCompanies();
@@ -3286,7 +3429,9 @@ function renderRecentBriefings() {
     return;
   }
   chips.innerHTML = items.map((it) =>
-    `<button type="button" class="chip" data-t="${esc(it.ticker)}" data-q="${esc(it.quarter)}">${esc(it.ticker)}${it.label ? ` · ${esc(shortQuarterLabel(it.label))}` : ""}</button>`).join("");
+    `<button type="button" class="chip" data-t="${esc(it.ticker)}" data-q="${esc(it.quarter)}">${logoImg(it.ticker, "logo-img logo-chip")}${esc(it.ticker)}${it.label ? ` <span class="tag tag-gray">${esc(shortQuarterLabel(it.label))}</span>` : ""}</button>`).join("");
+  const count = $("recent-briefings-count");
+  if (count) count.textContent = String(items.length);
   chips.querySelectorAll(".chip").forEach((btn) => {
     btn.addEventListener("click", () => {
       if (running) return;

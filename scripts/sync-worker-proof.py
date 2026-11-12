@@ -172,7 +172,8 @@ def _orchestrator() -> None:
     _sync("orchestrator",
           ["__init__.py", "schemas.py", "orchestrator.py", "orchestrator_async.py",
            "writer.py", "llm.py", "agent_app.py", "cards.py", "auth.py", "worker_http.py",
-           "ownership.py", "history.py", "edgar.py", "filings.py",
+           "ownership.py", "history.py", "dividends.py", "shareholder_yield.py",
+           "past_reactions.py", "calendar.py", "news_rss.py", "edgar.py", "filings.py",
            # history.py -> async_tools.py, whose closure is
            # stdlib-only (same set the critic proof vendors):
            "async_tools.py", "edgar_facts.py", "consensus.py", "transcript.py",

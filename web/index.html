@@ -55,20 +55,31 @@
       <button id="company-go" type="button" class="btn-primary">Search</button>
     </div>
     <div id="company-results" class="search-results" hidden></div>
-    <div id="recent-briefings" class="recent-searches" hidden>
-      <span class="label">Recent briefings</span>
-      <span id="recent-briefing-chips"></span>
-      <button type="button" class="btn-secondary" id="recent-briefings-clear">Clear</button>
-    </div>
-    <div id="recent-searches" class="recent-searches" hidden>
-      <span class="label">Recent searches</span>
-      <span id="recent-chips"></span>
-    </div>
-    <div id="most-searched" class="recent-searches" hidden>
-      <span class="label">Most searched</span>
-      <span id="most-chips"></span>
+    <!-- Batch 59: the three flat rows become a Discover zone — three
+         real mini-cards (Your briefings / Recent searches / Most
+         searched volume). IDs unchanged; the wrappers lost the
+         .recent-searches class, so .discover-card[hidden] hides them. -->
+    <div class="discover">
+      <section class="discover-card" id="recent-briefings" hidden>
+        <header class="discover-head"><span class="discover-icon disc-teal" aria-hidden="true"></span><h3>Your briefings</h3><span class="tag tag-gray" id="recent-briefings-count"></span><button type="button" class="btn-secondary" id="recent-briefings-clear">Clear</button></header>
+        <div id="recent-briefing-chips" class="disc-chips"></div>
+      </section>
+      <section class="discover-card" id="recent-searches" hidden>
+        <header class="discover-head"><span class="discover-icon disc-blue" aria-hidden="true"></span><h3>Recent searches</h3><span class="tag tag-blue">Live</span></header>
+        <div id="recent-chips" class="disc-chips"></div>
+      </section>
+      <section class="discover-card" id="most-searched" hidden>
+        <header class="discover-head"><span class="discover-icon disc-amber" aria-hidden="true"></span><h3>Most searched</h3><span class="tag tag-amber">Volume</span></header>
+        <div id="most-chips" class="vol-list"></div>
+      </section>
     </div>
     <p class="hint">Search <a href="companies/">167 large-cap companies</a> by name or ticker — pick a match and its briefing runs. Every number traces to a filing.</p>
+  </section>
+
+  <section class="card" id="calendar-strip">
+    <div class="card-head"><h3>Reporting this week</h3><span class="tag tag-green">Live</span><span class="card-sub">Nasdaq earnings calendar</span></div>
+    <div id="calendar-rows"></div>
+    <p class="meta">Expected report dates from the Nasdaq earnings calendar — dates can change.</p>
   </section>
 
   <div class="layout">
@@ -282,6 +293,13 @@
           <p id="b-reaction" class="body-text"></p>
         </section>
 
+        <section class="card" id="sec-past-reactions" hidden>
+          <h3>Past earnings reactions</h3>
+          <p class="rail-hint">How the close moved around each of the last four earnings reports. Closes only — not proof earnings caused the move, and past moves don't predict the next one.</p>
+          <div class="table-wrap"><table id="b-past-reactions"></table></div>
+          <p class="meta" id="b-past-reactions-footer" hidden></p>
+        </section>
+
         <section class="card" id="sec-watch" hidden>
           <h3>Guidance and what to watch</h3>
           <ul id="b-watch" class="list"></ul>
@@ -303,6 +321,12 @@
         <section class="card" id="sec-filings" hidden>
           <h3>Recent filings</h3>
           <ul id="b-filings" class="list"></ul>
+        </section>
+
+        <section class="card" id="sec-news" hidden>
+          <h3>News around earnings</h3>
+          <ul id="b-news" class="list"></ul>
+          <p class="meta">Headlines only — no summary. Headlines are the publishers' words, not verified briefing data.</p>
         </section>
 
         <section class="card card-muted" id="sec-notes" hidden>
@@ -406,6 +430,14 @@
         <div class="table-wrap"><table id="b-dividends"></table></div>
         <p class="meta" id="b-dividend-yield" hidden></p>
         <p class="meta" id="b-dividend-next" hidden></p>
+      </section>
+
+      <section class="card rail-card" id="chart-yield-card" hidden>
+        <h3>Shareholder yield</h3>
+        <p class="rail-hint">Buybacks + dividends returned over the last 4 quarters, divided by market cap. A ratio, not a return — never a reason to buy.</p>
+        <p class="body-text" id="b-yield-value"></p>
+        <p class="meta" id="b-yield-inputs"></p>
+        <p class="meta" id="b-yield-note" hidden></p>
       </section>
 
       <section class="card rail-card" id="chart-cashreturn-card" hidden>

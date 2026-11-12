@@ -35,6 +35,11 @@ from mesh.agent_app import create_app
 from mesh.auth import auth_headers
 from mesh.filings import fetch_recent_filings_async
 from mesh.history import history_for_ticker
+from mesh.dividends import dividends_for_ticker
+from mesh.shareholder_yield import shareholder_yield_for_ticker
+from mesh.past_reactions import past_reactions_for_ticker
+from mesh.calendar import calendar_for_week
+from mesh.news_rss import news_for_ticker
 from mesh.orchestrator_async import error_event, run_briefing_async
 from mesh.ownership import fetch_ownership_async
 from mesh.worker_http import fetch_json, post_json
@@ -273,6 +278,66 @@ async def history(ticker: str = "", metric: str = "total_revenue"):
     in the payload; only a bad ticker or metric is a 400."""
     try:
         return await history_for_ticker(ticker, metric)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.get("/dividends")
+async def dividends(ticker: str = ""):
+    """Dividend card data (Feature 14): last 4 Cash dividends +
+    trailing yield, computed in mesh/dividends.py. A failed fetch
+    degrades to empty rows (the frontend hides the card); only a
+    bad ticker is a 400."""
+    try:
+        return await dividends_for_ticker(ticker)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.get("/shareholder-yield")
+async def shareholder_yield(ticker: str = ""):
+    """Shareholder yield (Feature 15): (trailing buybacks +
+    trailing dividends) / market cap, computed in
+    mesh/shareholder_yield.py. A missing input degrades to null
+    (the frontend hides the card); only a bad ticker is a 400."""
+    try:
+        return await shareholder_yield_for_ticker(ticker)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.get("/past-reactions")
+async def past_reactions(ticker: str = ""):
+    """Past earnings reactions (Feature 20): last 4 earnings
+    moves, computed in mesh/past_reactions.py. A quarter whose
+    earnings 8-K cannot be identified is omitted, never
+    approximated; fewer than 2 rows hides the card. Only a bad
+    ticker is a 400."""
+    try:
+        return await past_reactions_for_ticker(ticker)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.get("/calendar")
+async def calendar():
+    """Earnings calendar strip (Feature 11): the next 7 days of
+    Nasdaq earnings-calendar rows, computed in mesh/calendar.py.
+    The frontend filters to directory tickers; a failed day
+    carries error: true and the strip shows it as unavailable."""
+    return await calendar_for_week()
+
+
+@app.get("/news")
+async def news(ticker: str = ""):
+    """News around earnings (Feature 24): headlines ±7 days
+    around the briefing's report date, computed in
+    mesh/news_rss.py from Google News RSS. A missing report
+    date, a failed feed, or nothing in the window degrades to
+    an empty list (the frontend hides the card); only a bad
+    ticker is a 400."""
+    try:
+        return await news_for_ticker(ticker)
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
 

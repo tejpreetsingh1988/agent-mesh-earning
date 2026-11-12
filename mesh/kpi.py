@@ -37,7 +37,9 @@ import json
 import re
 import urllib.error
 import urllib.request
+from datetime import date as _date
 
+from .edgar import EDGAR_HEADERS, exhibit_991_candidates
 from .edgar import UA as EDGAR_UA
 from .gateway_binding import GATEWAY_TIMEOUT_S, call_gateway_binding
 from .llm import MODELS, _call_openrouter
@@ -45,6 +47,10 @@ from .worker_ai import WORKERS_AI_MODEL, WORKERS_AI_TIMEOUT_S, call_workers_ai
 from .worker_http import fetch_json as _afetch_json
 from .worker_http import fetch_text as _afetch_text
 
+# Batch 54: EXHIBIT_991_RE / exhibit_991_candidates / EDGAR_HEADERS
+# moved to mesh/edgar.py (the Orchestrator proof vendors edgar.py
+# but not this module); re-exported here so existing imports
+# (fineprint, tests) keep working.
 EXHIBIT_991_RE = re.compile(r"ex(?:hibit)?[-_]?99[-_.]?1", re.I)
 # Batch 41: was 20,000. The Batch 40 split (KPIs alone, no diagram)
 # still timed out on Workers AI - output length was not the cause.
@@ -58,20 +64,6 @@ EXHIBIT_991_RE = re.compile(r"ex(?:hibit)?[-_]?99[-_.]?1", re.I)
 # follow-up, not this batch.
 RELEASE_TEXT_CAP = 6000
 MAX_KPIS = 12
-EDGAR_HEADERS = {"User-Agent": EDGAR_UA}
-
-
-def exhibit_991_candidates(items) -> list:
-    """Exhibit 99.1 filenames from an EDGAR index.json directory
-    listing. Filers name it unpredictably (a2026-q3_ex991.htm,
-    ex99-1.htm, exhibit991.htm), so match the ex99.1 shape, not
-    one literal name; HTML only, never the .txt bundle."""
-    out = []
-    for it in items or []:
-        name = (it or {}).get("name", "") if isinstance(it, dict) else ""
-        if name and EXHIBIT_991_RE.search(name) and name.lower().endswith((".htm", ".html")):
-            out.append(name)
-    return out
 
 
 def strip_html(raw: str) -> str:
@@ -115,9 +107,60 @@ def value_in_text(value: str, text: str) -> bool:
     return False
 
 
-def validate_kpis(items, release_text: str) -> list:
+def _quarter_label(quarter_end_iso: str) -> str:
+    """"2026-09-30" -> "Q3 2026". Empty when the quarter end
+    is missing or unparseable (the period rule then stays off)."""
+    try:
+        d = _date.fromisoformat(quarter_end_iso)
+    except (ValueError, TypeError):
+        return ""
+    return f"Q{(d.month - 1) // 3 + 1} {d.year}"
+
+
+def _period_matches(period: str, quarter_end_iso: str) -> bool:
+    """True when the item's period is consistent with the
+    release's quarter. Empty, the expected label, or a
+    non-quarter label (TTM/LTM/YTD) passes — the verbatim
+    check already gates the value, and dropping on an
+    unparseable period would lose real KPIs. A different
+    quarter (Q3 2025) or a different bare year (2027) fails."""
+    p = (period or "").strip()
+    if not p:
+        return True
+    expected = _quarter_label(quarter_end_iso)
+    if not expected:
+        return True
+    if p == expected:
+        return True
+    m = re.search(r"Q([1-4])\s+(\d{4})", p, re.I)
+    if m:
+        return f"Q{int(m.group(1))} {m.group(2)}" == expected
+    m = re.fullmatch(r"(\d{4})", p)
+    if m:
+        return int(m.group(1)) == int(expected.split()[1])
+    return True
+
+
+# Batch 56: names that ARE a standard financial the prompt
+# excludes (revenue, net income, EPS, EBITDA — the Analyst
+# already covers them). Matched on the whole normalized name,
+# so "Revenue per shop" (a real operating KPI) survives while
+# "Total Revenues" does not.
+_STANDARD_FINANCIALS = {"total revenue", "total revenues", "revenue", "revenues",
+                        "net income", "net earnings", "eps", "diluted eps",
+                        "ebitda", "adjusted ebitda", "earnings per share"}
+
+
+def validate_kpis(items, release_text: str, quarter_end_iso: str = "") -> list:
     """Drop every item whose value is not verbatim in the release
-    (never patched), normalize kinds, cap the list."""
+    (never patched), normalize kinds, cap the list. Batch 56
+    adds two deterministic enforcements the prompt alone does
+    not achieve (the live BROS run carried 2 revenue items and
+    5 guidance items labelled 2027): a name that IS a standard
+    financial is dropped, and a period naming a different
+    quarter or year than the release's is dropped. Without a
+    quarter_end_iso both new rules stay off, so existing callers
+    are unaffected."""
     out = []
     for it in items or []:
         if not isinstance(it, dict):
@@ -127,6 +170,11 @@ def validate_kpis(items, release_text: str) -> list:
         if not name or not value:
             continue
         if not value_in_text(value, release_text):
+            continue
+        norm_name = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", "", name.lower())).strip()
+        if norm_name in _STANDARD_FINANCIALS:
+            continue
+        if not _period_matches(str(it.get("period", "")), quarter_end_iso):
             continue
         out.append({"name": name, "value": value,
                     "unit": str(it.get("unit", "")).strip(),
@@ -421,7 +469,8 @@ def fetch_release_text_sync(ticker: str, quarter_end_iso: str):
     return None, ""
 
 
-def _settle_kpis_reply(text: str, release_text: str, allow_empty: bool = True):
+def _settle_kpis_reply(text: str, release_text: str, allow_empty: bool = True,
+                       quarter_end_iso: str = ""):
     """Phase-1 settle (Batch 40 split): (settled?, valid_items).
     Settled when the reply yields valid KPIs. A clean-empty parse
     settles only when allow_empty: the first model that returns
@@ -434,7 +483,7 @@ def _settle_kpis_reply(text: str, release_text: str, allow_empty: bool = True):
     items, _draw_raw, ok = parse_kpi_response(text)
     if not ok:
         return False, None
-    valid = validate_kpis(items, release_text)
+    valid = validate_kpis(items, release_text, quarter_end_iso)
     if valid:
         return True, valid
     if items == []:
@@ -443,7 +492,7 @@ def _settle_kpis_reply(text: str, release_text: str, allow_empty: bool = True):
 
 
 async def extract_kpis_async(release_text: str, llm_call=None, ai=None, api_key: str = "",
-                             debug: dict | None = None):
+                             debug: dict | None = None, quarter_end_iso: str = ""):
     """Two-phase extraction down the story chain (Workers AI, then
     gateway models, then direct OpenRouter), returning
     (kpi items, diagram-or-None). Phase 1 extracts KPIs alone;
@@ -505,7 +554,7 @@ async def extract_kpis_async(release_text: str, llm_call=None, ai=None, api_key:
             result = await asyncio.wait_for(fn(system, user), timeout=timeout)
             replies += 1
             _note((result or {}).get("text", ""))
-            settled, valid = _settle_kpis_reply(last_text, release_text, allow_empty=replies > 1)
+            settled, valid = _settle_kpis_reply(last_text, release_text, allow_empty=replies > 1, quarter_end_iso=quarter_end_iso)
             if settled:
                 items = valid
                 winner = idx
@@ -563,7 +612,7 @@ async def _call_openrouter_async(model: str, system: str, user: str, api_key: st
 
 
 def extract_kpis_sync(release_text: str, llm_call=None, api_key: str = "",
-                      debug: dict | None = None):
+                      debug: dict | None = None, quarter_end_iso: str = ""):
     """Sync twin (Docker path): direct OpenRouter chain only,
     returning (kpi items, diagram-or-None). Same Batch 40
     two-phase split as the async twin. debug: same Batches 38-39
@@ -604,7 +653,7 @@ def extract_kpis_sync(release_text: str, llm_call=None, api_key: str = "",
             result = caller(model, system, user)
             replies += 1
             _note((result or {}).get("text", ""))
-            settled, valid = _settle_kpis_reply(last_text, release_text, allow_empty=replies > 1)
+            settled, valid = _settle_kpis_reply(last_text, release_text, allow_empty=replies > 1, quarter_end_iso=quarter_end_iso)
             if settled:
                 items = valid
                 winner = idx
@@ -655,7 +704,7 @@ async def kpis_for_pack_async(ticker: str, quarter_end_iso: str, llm_call=None,
             if debug is not None:
                 debug["settled_on"] = "no_text"
             return [], None, ""
-        items, diagram = await extract_kpis_async(text, llm_call=llm_call, ai=ai, api_key=api_key, debug=debug)
+        items, diagram = await extract_kpis_async(text, llm_call=llm_call, ai=ai, api_key=api_key, debug=debug, quarter_end_iso=quarter_end_iso)
         return items, diagram, url if (items or diagram is not None) else ""
     except Exception:
         if debug is not None:
@@ -675,7 +724,7 @@ def kpis_for_pack_sync(ticker: str, quarter_end_iso: str, llm_call=None, api_key
             if debug is not None:
                 debug["settled_on"] = "no_text"
             return [], None, ""
-        items, diagram = extract_kpis_sync(text, llm_call=llm_call, api_key=api_key, debug=debug)
+        items, diagram = extract_kpis_sync(text, llm_call=llm_call, api_key=api_key, debug=debug, quarter_end_iso=quarter_end_iso)
         return items, diagram, url if (items or diagram is not None) else ""
     except Exception:
         if debug is not None:

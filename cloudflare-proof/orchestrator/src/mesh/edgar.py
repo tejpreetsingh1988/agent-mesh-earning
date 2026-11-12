@@ -16,6 +16,27 @@ from functools import lru_cache
 
 UA = os.environ.get("EDGAR_USER_AGENT", "agent-mesh-earnings/0.1 (contact@example.com)")
 
+EDGAR_HEADERS = {"User-Agent": UA}
+
+EXHIBIT_991_RE = re.compile(r"ex(?:hibit)?[-_]?99[-_.]?1", re.I)
+
+
+def exhibit_991_candidates(items) -> list:
+    """Exhibit 99.1 filenames from an EDGAR index.json directory
+    listing. Filers name it unpredictably (a2026-q3_ex991.htm,
+    ex99-1.htm, exhibit991.htm), so match the ex99.1 shape, not
+    one literal name; HTML only, never the .txt bundle.
+    Moved here from mesh/kpi.py (Batch 54): the Orchestrator
+    proof vendors edgar.py but not kpi.py (kpi.py pulls the LLM
+    chain), and Feature 20's past_reactions needs this matcher
+    on the Orchestrator path. kpi.py re-exports it."""
+    out = []
+    for it in items or []:
+        name = (it or {}).get("name", "") if isinstance(it, dict) else ""
+        if name and EXHIBIT_991_RE.search(name) and name.lower().endswith((".htm", ".html")):
+            out.append(name)
+    return out
+
 def _get_json(url: str):
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=30) as r:
