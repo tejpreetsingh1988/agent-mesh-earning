@@ -59,6 +59,25 @@ def test_release_facts_rejects_tampered_row():
     assert any(f["metric"] == "net_income" for f in r["facts"])
 
 
+def test_release_facts_parse_cleaned_exhibit():
+    # Batch 71: the production path cleans the exhibit with
+    # _clean_html before parsing. The old cleaner collapsed all
+    # whitespace to one line, which broke the parser's line-start
+    # anchored labels — the live NBIS run (Nov 12) emitted only
+    # shares_outstanding and four "could not verify" notes. The
+    # fixture must survive cleaning with its rows intact.
+    from mesh.edgar import _clean_html
+    cleaned = _clean_html(EXHIBIT)
+    assert "\n" in cleaned
+    r = extract_release_facts(cleaned, ticker="NBIS", quarter_end=date(2026, 9, 30),
+                              exhibit_url=EXHIBIT_URL, filing_date="2026-11-12")
+    assert r["missing"] == []
+    by_key = {(f["metric"], f["period"]): f["value"] for f in r["facts"]}
+    assert by_key[("total_revenue", "2026-09-30")] == 0.9808
+    assert by_key[("adjusted_ebitda", "2026-09-30")] == 0.4658
+    assert by_key[("shares_outstanding", "2026-09-30")] == 292902405.0
+
+
 def test_quarter_end_from_release():
     assert quarter_end_from_release(EXHIBIT) == date(2026, 9, 30)
     assert quarter_end_from_release("no period stated here") is None

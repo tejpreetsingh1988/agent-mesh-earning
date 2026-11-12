@@ -234,7 +234,16 @@ def _clean_html(html_text: str) -> str:
         html_text = html_text[html_text.index(marker):]
     text = re.sub(r"<[^>]+>", " ", html_text)
     text = html_lib.unescape(text)
-    text = re.sub(r"\s+", " ", text)
+    # Batch 71: preserve line structure. The old `re.sub(r"\s+", " ")`
+    # collapsed the whole document to one line, and the release-text
+    # parser anchors its row labels to line starts (`(?m)^\s*`) — so
+    # no 6-K highlights row could ever match in production text, even
+    # though the vendored fixture (newlines intact) passed. The live
+    # NBIS run (Nov 12) emitted only shares_outstanding and four
+    # "could not verify" notes for exactly this reason. Collapse
+    # horizontal whitespace only; collapse blank lines.
+    text = re.sub(r"[^\S\n]+", " ", text)
+    text = re.sub(r"\n\s*\n+", "\n", text)
     return text.strip()
 
 def get_filing_text(ticker: str = "", accession: str = "", primary_document: str = "", max_chars: int = 12000) -> dict:
