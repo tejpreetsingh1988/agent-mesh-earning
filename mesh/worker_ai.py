@@ -20,15 +20,20 @@ locally — where the `workers` module does not exist — this
 whole path is simply absent and the OpenRouter chain runs
 unchanged.
 
-Model choice: `@cf/meta/llama-3.1-8b-instruct-fp8`. It is NOT
-one of the seven frontier models that require a paid billing
-method (Kimi K2.6/K2.7, GLM 5.2/5.3/5.3-flash, DeepSeek V4
-Flash/Pro), and at ~490 replies/day of this size on the free
-10,000-neuron allowance it is the cheapest model that can
-plausibly write a validated story. If it fails validation
-repeatedly in production, the next step up is Llama 3.3 70B
-(~83/day) or gpt-oss-120b (far fewer/day) — same code, only
-the model name changes.
+Model choice (Nov 20, 2026, interim pick — Tej: "llama 3.3 for
+now"): `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, verified
+against the current catalog
+(developers.cloudflare.com/workers-ai/models/llama-3.3-70b-instruct-fp8-fast/).
+It is NOT one of the seven frontier models that require a paid
+billing method (Kimi K2.6/K2.7, GLM 5.2/5.3/5.3-flash, DeepSeek V4
+Flash/Pro). At $0.293/M input and $2.253/M output tokens it runs
+~26,668 / 204,805 neurons per 1M tokens — roughly ~1,080 neurons
+per full briefing (story + KPI + fine-print legs), so ~9
+briefings/day on the free 10,000-neuron allowance. That is ~5x
+the cost of gemma-4-26b-a4b-it (~200/briefing, ~50/day), which
+stays the recommended long-term pick; Llama 3.3 is the interim
+choice while the 3.1 8B model it replaces is retired. Same code,
+only the model name changes.
 
 Model-ID churn, learned Nov 2, 2026: the first choice,
 `@cf/meta/llama-3.1-8b-instruct` (no -fp8 suffix), returned
@@ -51,7 +56,7 @@ story happened when it did not.
 
 import time
 
-WORKERS_AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8"
+WORKERS_AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 WORKERS_AI_TIMEOUT_S = 60
 
 
