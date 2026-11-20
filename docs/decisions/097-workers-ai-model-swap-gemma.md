@@ -66,7 +66,7 @@ Applied Nov 20, 2026:
   after deploy, probe the live site for a Workers AI `story_model` and the
   measured tokens_in/tokens_out.
 
-## Exact change for the gemma alternative (not applied — superseded for now by the Llama 3.3 interim pick above)
+## Exact change for the gemma alternative (APPLIED Nov 20 — see update above; the Llama 3.3 interim pick is now superseded)
 One line, two files (the repo copy and the deployed proof copy carry the
 same constant):
 - `mesh/worker_ai.py:54`: `WORKERS_AI_MODEL = "@cf/google/gemma-4-26b-a4b-it"`
@@ -80,3 +80,20 @@ same constant):
   confirm the `story_model` label reads Workers AI/gemma and the neuron
   usage matches the estimate above. Fallback chain (OpenRouter, then
   deterministic story) is unchanged — a gemma failure never breaks a briefing.
+
+## Update (Nov 20, 2026) — Llama 3.3 tried, proved slow, switched to gemma
+Live BROS test after the Wave-9 deploy (run 12:31 MST Nov 20, trace
+e389227a-57a1-41ab-8d9d-bfd1a803469c, output
+~/workspace/overnight-probes/llama33_live_test_bros.txt):
+story_model `@cf/meta/llama-3.3-70b-instruct-fp8-fast (Workers AI)` —
+3.3 was live and serving. But the Writer leg took **201.7s for the
+story alone** (past the 180s step deadline; Scout 5.3s, Analyst 1.7s),
+vs ~138s for the same leg on Llama 3.1 8B (NVDA, Nov 5). The briefing
+still completed, but Tej reported the process feeling slow and chose
+gemma the same day. Applied Nov 20, 2026 (Wave-10):
+`WORKERS_AI_MODEL = "@cf/google/gemma-4-26b-a4b-it"` in both files,
+docstring updated. Live proof: fresh briefing after the Workers pick
+up the code; expect the story leg well under 180s and ~200
+neurons/briefing. (Note: the Wave-9 post-push watch and the first
+scheduled 3.3 live test both died as background jobs — the 12:31
+re-run above was launched detached with setsid and completed.)
